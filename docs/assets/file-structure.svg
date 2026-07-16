@@ -1,0 +1,186 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1180" viewBox="0 0 900 1180">
+  <defs>
+    <style>
+      .mono { font-family: 'Consolas', 'Monaco', 'Lucida Console', 'Courier New', monospace; }
+      .sans { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="1180" fill="#0d1117" rx="10"/>
+
+  <!-- Top accent bar -->
+  <rect x="0" y="0" width="900" height="4" fill="#238636" rx="2"/>
+
+  <!-- Title -->
+  <text class="sans" x="450" y="38" fill="#e6edf3" font-size="17" font-weight="bold" text-anchor="middle">Repository Structure</text>
+  <text class="sans" x="450" y="60" fill="#6e7681" font-size="12" text-anchor="middle">agent_guardrails  ·  4 Agents  ·  44+ Rules  ·  100% Test Coverage</text>
+
+  <!-- Divider -->
+  <line x1="30" y1="72" x2="870" y2="72" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Row 0: root -->
+  <text class="mono" x="30" y="95" fill="#f78166" font-weight="bold" font-size="14">agent_guardrails/</text>
+
+  <!-- Row 1: .github/ -->
+  <text class="mono" x="30" y="117" font-size="13"><tspan fill="#484f58">├── </tspan><tspan fill="#79c0ff" font-weight="bold">.github/</tspan></text>
+
+  <!-- Row 2: agents/ -->
+  <text class="mono" x="30" y="139" font-size="13"><tspan fill="#484f58">│   ├── </tspan><tspan fill="#79c0ff" font-weight="bold">agents/</tspan></text>
+
+  <!-- Row 3: Benchmark-agent.md -->
+  <text class="mono" x="30" y="161" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#8b949e">Benchmark-agent.md</tspan><tspan fill="#6e7681" font-size="11" dx="8">hub orchestrator + loop coordinator</tspan></text>
+
+  <!-- Row 4: guardrail-agent.md -->
+  <text class="mono" x="30" y="183" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#8b949e">guardrail-agent.md</tspan><tspan fill="#6e7681" font-size="11" dx="8">Harness OPA enforcement engine</tspan></text>
+
+  <!-- Row 5: pi-guardrail-agent.md -->
+  <text class="mono" x="30" y="205" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#8b949e">pi-guardrail-agent.md</tspan><tspan fill="#6e7681" font-size="11" dx="8">Pi coding agent workflow enforcement</tspan></text>
+
+  <!-- Row 6: research-agent.md -->
+  <text class="mono" x="30" y="227" font-size="13"><tspan fill="#484f58">│   │   └── </tspan><tspan fill="#8b949e">research-agent.md</tspan><tspan fill="#6e7681" font-size="11" dx="8">automated policy intelligence engine</tspan></text>
+
+  <!-- Row 7: ISSUE_TEMPLATE/ -->
+  <text class="mono" x="30" y="249" font-size="13"><tspan fill="#484f58">│   ├── </tspan><tspan fill="#79c0ff" font-weight="bold">ISSUE_TEMPLATE/</tspan></text>
+
+  <!-- Row 8: policy-exception.md -->
+  <text class="mono" x="30" y="271" font-size="13"><tspan fill="#484f58">│   │   └── </tspan><tspan fill="#8b949e">policy-exception.md</tspan><tspan fill="#6e7681" font-size="11" dx="8">policy exception request template</tspan></text>
+
+  <!-- Row 9: workflows/ -->
+  <text class="mono" x="30" y="293" font-size="13"><tspan fill="#484f58">│   └── </tspan><tspan fill="#79c0ff" font-weight="bold">workflows/</tspan></text>
+
+  <!-- Row 10: loop-engine.yml -->
+  <text class="mono" x="30" y="315" font-size="13"><tspan fill="#484f58">│       ├── </tspan><tspan fill="#56d364">loop-engine.yml</tspan><tspan fill="#6e7681" font-size="11" dx="8">AI auto-fix loop — triggers on PR</tspan></text>
+
+  <!-- Row 11: research-agent.yml -->
+  <text class="mono" x="30" y="337" font-size="13"><tspan fill="#484f58">│       └── </tspan><tspan fill="#56d364">research-agent.yml</tspan><tspan fill="#6e7681" font-size="11" dx="8">weekly policy research scan</tspan></text>
+
+  <!-- Row 12: policies/ -->
+  <text class="mono" x="30" y="359" font-size="13"><tspan fill="#484f58">├── </tspan><tspan fill="#79c0ff" font-weight="bold">policies/</tspan></text>
+
+  <!-- Row 13: opa/ -->
+  <text class="mono" x="30" y="381" font-size="13"><tspan fill="#484f58">│   ├── </tspan><tspan fill="#79c0ff" font-weight="bold">opa/</tspan><tspan fill="#6e7681" font-size="11" dx="8">Harness OPA policies · 34 rules</tspan></text>
+
+  <!-- Row 14: pipeline-guardrails.rego -->
+  <text class="mono" x="30" y="403" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#e3b341">pipeline-guardrails.rego</tspan><tspan fill="#6e7681" font-size="11" dx="8">PG-001→009</tspan></text>
+
+  <!-- Row 15: pipeline-guardrails_test.rego -->
+  <text class="mono" x="30" y="425" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#e3b341">pipeline-guardrails_test.rego</tspan></text>
+
+  <!-- Row 16: code-security.rego -->
+  <text class="mono" x="30" y="447" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#e3b341">code-security.rego</tspan><tspan fill="#6e7681" font-size="11" dx="8">CS-001→009</tspan></text>
+
+  <!-- Row 17: code-security_test.rego -->
+  <text class="mono" x="30" y="469" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#e3b341">code-security_test.rego</tspan></text>
+
+  <!-- Row 18: connector-compliance.rego -->
+  <text class="mono" x="30" y="491" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#e3b341">connector-compliance.rego</tspan><tspan fill="#6e7681" font-size="11" dx="8">CC-001→008</tspan></text>
+
+  <!-- Row 19: connector-compliance_test.rego -->
+  <text class="mono" x="30" y="513" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#e3b341">connector-compliance_test.rego</tspan></text>
+
+  <!-- Row 20: delegate-validation.rego -->
+  <text class="mono" x="30" y="535" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#e3b341">delegate-validation.rego</tspan><tspan fill="#6e7681" font-size="11" dx="8">DV-001→008</tspan></text>
+
+  <!-- Row 21: delegate-validation_test.rego -->
+  <text class="mono" x="30" y="557" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#e3b341">delegate-validation_test.rego</tspan></text>
+
+  <!-- Row 22: research-proposals.rego -->
+  <text class="mono" x="30" y="579" font-size="13"><tspan fill="#484f58">│   │   └── </tspan><tspan fill="#e3b341">research-proposals.rego</tspan><tspan fill="#6e7681" font-size="11" dx="8">auto-generated</tspan></text>
+
+  <!-- Row 23: pi/ -->
+  <text class="mono" x="30" y="601" font-size="13"><tspan fill="#484f58">│   ├── </tspan><tspan fill="#79c0ff" font-weight="bold">pi/</tspan><tspan fill="#6e7681" font-size="11" dx="8">Pi guardrail policies · 10 rules</tspan></text>
+
+  <!-- Row 24: bash-security.rego -->
+  <text class="mono" x="30" y="623" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#e3b341">bash-security.rego</tspan><tspan fill="#6e7681" font-size="11" dx="8">PI-001→003</tspan></text>
+
+  <!-- Row 25: bash-security_test.rego -->
+  <text class="mono" x="30" y="645" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#e3b341">bash-security_test.rego</tspan></text>
+
+  <!-- Row 26: code-standards.rego -->
+  <text class="mono" x="30" y="667" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#e3b341">code-standards.rego</tspan><tspan fill="#6e7681" font-size="11" dx="8">PI-006→009</tspan></text>
+
+  <!-- Row 27: code-standards_test.rego -->
+  <text class="mono" x="30" y="689" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#e3b341">code-standards_test.rego</tspan></text>
+
+  <!-- Row 28: workflow-gates.rego -->
+  <text class="mono" x="30" y="711" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#e3b341">workflow-gates.rego</tspan><tspan fill="#6e7681" font-size="11" dx="8">PI-004, PI-005, PI-010</tspan></text>
+
+  <!-- Row 29: workflow-gates_test.rego -->
+  <text class="mono" x="30" y="733" font-size="13"><tspan fill="#484f58">│   │   └── </tspan><tspan fill="#e3b341">workflow-gates_test.rego</tspan></text>
+
+  <!-- Row 30: pipeline/ -->
+  <text class="mono" x="30" y="755" font-size="13"><tspan fill="#484f58">│   ├── </tspan><tspan fill="#79c0ff" font-weight="bold">pipeline/</tspan></text>
+
+  <!-- Row 31: stage-gates.yaml -->
+  <text class="mono" x="30" y="777" font-size="13"><tspan fill="#484f58">│   │   ├── </tspan><tspan fill="#56d364">stage-gates.yaml</tspan></text>
+
+  <!-- Row 32: approval-rules.yaml -->
+  <text class="mono" x="30" y="799" font-size="13"><tspan fill="#484f58">│   │   └── </tspan><tspan fill="#56d364">approval-rules.yaml</tspan></text>
+
+  <!-- Row 33: research/ -->
+  <text class="mono" x="30" y="821" font-size="13"><tspan fill="#484f58">│   └── </tspan><tspan fill="#79c0ff" font-weight="bold">research/</tspan></text>
+
+  <!-- Row 34: threat-feed.yaml -->
+  <text class="mono" x="30" y="843" font-size="13"><tspan fill="#484f58">│       ├── </tspan><tspan fill="#56d364">threat-feed.yaml</tspan></text>
+
+  <!-- Row 35: update-log.md -->
+  <text class="mono" x="30" y="865" font-size="13"><tspan fill="#484f58">│       ├── </tspan><tspan fill="#8b949e">update-log.md</tspan><tspan fill="#6e7681" font-size="11" dx="8">research scan results</tspan></text>
+
+  <!-- Row 36: loop-log.md -->
+  <text class="mono" x="30" y="887" font-size="13"><tspan fill="#484f58">│       └── </tspan><tspan fill="#8b949e">loop-log.md</tspan><tspan fill="#6e7681" font-size="11" dx="8">auto-fix loop history</tspan></text>
+
+  <!-- Row 37: scripts/ -->
+  <text class="mono" x="30" y="909" font-size="13"><tspan fill="#484f58">├── </tspan><tspan fill="#79c0ff" font-weight="bold">scripts/</tspan></text>
+
+  <!-- Row 38: loop_engine.py -->
+  <text class="mono" x="30" y="931" font-size="13"><tspan fill="#484f58">│   ├── </tspan><tspan fill="#ffa657">loop_engine.py</tspan><tspan fill="#6e7681" font-size="11" dx="8">AI auto-fix loop engine</tspan></text>
+
+  <!-- Row 39: research_agent.py -->
+  <text class="mono" x="30" y="953" font-size="13"><tspan fill="#484f58">│   └── </tspan><tspan fill="#ffa657">research_agent.py</tspan><tspan fill="#6e7681" font-size="11" dx="8">CVE/OWASP/CISA/Harness scanner</tspan></text>
+
+  <!-- Row 40: docs/ -->
+  <text class="mono" x="30" y="975" font-size="13"><tspan fill="#484f58">└── </tspan><tspan fill="#79c0ff" font-weight="bold">docs/</tspan></text>
+
+  <!-- Row 41: policy-guide.md -->
+  <text class="mono" x="30" y="997" font-size="13"><tspan fill="#484f58">    ├── </tspan><tspan fill="#8b949e">policy-guide.md</tspan></text>
+
+  <!-- Row 42: violation-remediation.md -->
+  <text class="mono" x="30" y="1019" font-size="13"><tspan fill="#484f58">    ├── </tspan><tspan fill="#8b949e">violation-remediation.md</tspan></text>
+
+  <!-- Row 43: assets/ -->
+  <text class="mono" x="30" y="1041" font-size="13"><tspan fill="#484f58">    └── </tspan><tspan fill="#79c0ff" font-weight="bold">assets/</tspan></text>
+
+  <!-- Row 44: architecture.svg -->
+  <text class="mono" x="30" y="1063" font-size="13"><tspan fill="#484f58">        ├── </tspan><tspan fill="#bc8cff">architecture.svg</tspan></text>
+
+  <!-- Row 45: file-structure.svg -->
+  <text class="mono" x="30" y="1085" font-size="13"><tspan fill="#484f58">        └── </tspan><tspan fill="#bc8cff">file-structure.svg</tspan><tspan fill="#238636" font-size="11" dx="8">← this file</tspan></text>
+
+  <!-- Divider before legend -->
+  <line x1="30" y1="1105" x2="870" y2="1105" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Legend -->
+  <text class="sans" x="30" y="1128" fill="#6e7681" font-size="12">Legend:</text>
+
+  <rect x="92" y="1116" width="12" height="12" fill="#79c0ff" rx="2"/>
+  <text class="sans" x="108" y="1127" fill="#8b949e" font-size="11">directory</text>
+
+  <rect x="178" y="1116" width="12" height="12" fill="#e3b341" rx="2"/>
+  <text class="sans" x="194" y="1127" fill="#8b949e" font-size="11">.rego policy</text>
+
+  <rect x="278" y="1116" width="12" height="12" fill="#56d364" rx="2"/>
+  <text class="sans" x="294" y="1127" fill="#8b949e" font-size="11">.yaml / .yml</text>
+
+  <rect x="378" y="1116" width="12" height="12" fill="#ffa657" rx="2"/>
+  <text class="sans" x="394" y="1127" fill="#8b949e" font-size="11">.py script</text>
+
+  <rect x="460" y="1116" width="12" height="12" fill="#8b949e" rx="2"/>
+  <text class="sans" x="476" y="1127" fill="#8b949e" font-size="11">.md document</text>
+
+  <rect x="566" y="1116" width="12" height="12" fill="#bc8cff" rx="2"/>
+  <text class="sans" x="582" y="1127" fill="#8b949e" font-size="11">.svg diagram</text>
+
+  <!-- Footer -->
+  <text class="sans" x="450" y="1162" fill="#484f58" font-size="11" text-anchor="middle">4 Agents · 44 Rules · 7 Test Files · 100% Coverage · Self-Healing Loop Engine</text>
+</svg>

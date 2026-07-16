@@ -1,0 +1,314 @@
+name: Research Agent — Policy Intelligence Scan
+
+on:
+  # Weekly scheduled run — Monday 08:00 UTC
+  schedule:
+    - cron: '0 8 * * 1'
+
+  # Manual on-demand trigger
+  workflow_dispatch:
+    inputs:
+      trigger_type:
+        description: 'on_demand'
+        required: false
+        default: 'on_demand'
+
+permissions:
+  contents: write
+  issues: write
+
+# Prevent duplicate research scans if the schedule and a manual dispatch
+# overlap, or if the workflow is re-triggered before the previous run
+# finishes.  Runs queue (cancel-in-progress: false) so no scan is dropped.
+concurrency:
+  group: research-agent-scan
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  research-scan:
+    name: Research Agent Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ensure required labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          labels=(
+            "automated|0075ca|Auto-created by Research Agent"
+            "research-proposal|e4e669|Research Agent policy proposal"
+            "loop-engine-escalation|d93f0b|Loop Engine escalation"
+            "needs-human-review|e99695|Requires manual review"
+            "health-check-failure|b60205|Health check failed"
+            "scan-category-clean|0e8a16|Research scan completed cleanly"
+            "scan-category-api-unreachable|e4e669|Research scan: API source unreachable"
+            "scan-category-stats-mismatch|fbca04|Research scan: gap count inconsistency"
+            "scan-category-session-cancelled|d93f0b|Research scan: run was cancelled"
+            "scan-category-unknown-anomaly|b60205|Research scan: unexpected output shape"
+            "copilot-assigned|0075ca|Copilot coding agent assigned to this issue"
+            "needs-human-escalation|cc317c|Auto-retry limit exceeded — human review needed"
+          )
+          for label in "${labels[@]}"; do
+            NAME=$(echo "$label" | cut -d'|' -f1)
+            COLOR=$(echo "$label" | cut -d'|' -f2)
+            DESC=$(echo "$label" | cut -d'|' -f3)
+            gh label create "$NAME" \
+              --color "$COLOR" \
+              --description "$DESC" \
+              --force 2>/dev/null || true
+            echo "✅ $NAME"
+          done
+          echo "All labels verified" > $GITHUB_STEP_SUMMARY
+
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Determine trigger type
+        id: trigger
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "trigger=scheduled" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "trigger=${{ github.event.inputs.trigger_type || 'on_demand' }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Install OPA CLI
+        run: |
+          curl -sL https://github.com/open-policy-agent/opa/releases/download/v0.68.0/opa_linux_amd64_static \
+            -o /usr/local/bin/opa
+          chmod +x /usr/local/bin/opa
+          opa version
+
+      - name: Test API connections (with retry)
+        id: connection_test
+        env:
+          NIST_API_KEY: ${{ secrets.NIST_API_KEY }}
+        run: |
+          # Warn early when no NVD API key is configured — unauthenticated
+          # requests are more aggressively rate-limited and prone to 503s.
+          if [ -z "$NIST_API_KEY" ]; then
+            echo "⚠️ NIST_API_KEY secret is not set — NVD requests run unauthenticated (higher rate-limit risk)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Retry up to 3 attempts with exponential backoff (30 s → 60 s).
+          # Transient rate-limits or timeouts should clear within 2 retries;
+          # a persistent failure after all attempts is classified api_unreachable.
+          MAX_ATTEMPTS=3
+          DELAY=30
+          STATUS="failed"
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            echo "Connection test attempt $attempt/$MAX_ATTEMPTS"
+            if python3 scripts/research_agent.py --test-connections \
+                > /tmp/conn_out.txt 2>&1; then
+              STATUS="success"
+              cat /tmp/conn_out.txt
+              break
+            fi
+            cat /tmp/conn_out.txt
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "Retrying in ${DELAY}s..."
+              sleep "$DELAY"
+              DELAY=$((DELAY * 2))
+            fi
+          done
+          echo "connection_status=${STATUS}" >> "$GITHUB_OUTPUT"
+          if [ "$STATUS" = "failed" ]; then
+            # Extract source names from ❌ lines, e.g. "❌ NVD API: ..."
+            FAILING=$(grep '❌' /tmp/conn_out.txt \
+              | sed 's/.*❌ //' | sed 's/ API:.*//' \
+              | tr '[:upper:]' '[:lower:]' | tr '\n' ',' | sed 's/,$//' || true)
+            echo "failing_sources=${FAILING}" >> "$GITHUB_OUTPUT"
+          else
+            echo "failing_sources=" >> "$GITHUB_OUTPUT"
+          fi
+        continue-on-error: true
+
+      - name: Report connection status
+        run: |
+          if [ "${{ steps.connection_test.outputs.connection_status }}" = "success" ]; then
+            echo "✅ All APIs reachable" >> $GITHUB_STEP_SUMMARY
+          else
+            FAILING="${{ steps.connection_test.outputs.failing_sources }}"
+            echo "⚠️ Some APIs unreachable after retries (${FAILING}) — research scan may be incomplete" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Load existing rule baseline
+        id: load_rules
+        run: |
+          echo "Loading existing OPA rules from policies/opa/ and policies/pi/"
+          # Extract rule IDs from .rego files for baseline tracking
+          rule_ids=$(grep -rh '# Rule:' policies/opa/ policies/pi/ \
+            | sed 's/.*# Rule: //' | sort | tr '\n' ',')
+          echo "existing_rules=${rule_ids%,}" >> "$GITHUB_OUTPUT"
+          echo "Existing rules found: ${rule_ids}"
+
+      - name: Run research scan
+        id: gap_analysis
+        env:
+          NIST_API_KEY: ${{ secrets.NIST_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RESEARCH_TRIGGER: ${{ steps.trigger.outputs.trigger }}
+          LOOKBACK_DAYS: "30"
+        run: |
+          python3 scripts/research_agent.py --max-cves 50 --force-scan
+
+      - name: Validate OPA policy syntax
+        run: |
+          echo "Validating all .rego files..."
+          find policies/ -name "*.rego" ! -name "*_test.rego" | while read f; do
+            opa check "$f" && echo "OK: $f" || echo "FAIL: $f"
+          done
+
+      - name: Create research summary issue
+        id: create_issue
+        if: steps.gap_analysis.outputs.gaps_count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GAPS_COUNT: ${{ steps.gap_analysis.outputs.gaps_count }}
+          RUN_DATE: ${{ github.run_id }}
+        run: |
+          BRANCH="research/auto-$(date +%Y-%m-%d)-${RUN_DATE}"
+          git config user.name  "Research Agent"
+          git config user.email "research-agent@github-actions.bot"
+          git checkout -b "${BRANCH}"
+          git add policies/research/update-log.md policies/research/current-scan-summary.md
+          git commit -m "[Research Agent] Policy gap scan — $(date +%Y-%m-%d)
+
+          Gaps found: ${GAPS_COUNT}
+          See policies/research/update-log.md for details."
+          git push origin "${BRANCH}"
+
+          # Read scan results — use current-scan-summary.md (current run only)
+          # to avoid matching stale "Gaps found:" values from prior log entries.
+          if [ -f "policies/research/current-scan-summary.md" ]; then
+            SUMMARY=$(cat policies/research/current-scan-summary.md)
+          elif [ -f "policies/research/update-log.md" ]; then
+            SUMMARY=$(tail -60 policies/research/update-log.md)
+          else
+            SUMMARY="See branch for details"
+          fi
+
+          # Count proposed rules — fixed to avoid grep -c double-output:
+          # grep -c exits 1 on 0 matches (printing "0"), which previously
+          # triggered "|| echo 0" and produced RULE_COUNT="0\n0".
+          RULE_COUNT=0
+          if [ -f "policies/opa/research-proposals.rego" ]; then
+            n=$(grep -cE "^(violation|warn|deny)\[" \
+              policies/opa/research-proposals.rego 2>/dev/null) \
+              && RULE_COUNT=$n || true
+          fi
+
+          ISSUE_URL=$(gh issue create \
+            --title "🔬 Research Agent Scan — $(date +%Y-%m-%d)" \
+            --body "## Research Agent — Policy Intelligence Scan
+
+          **Date:** $(date)
+          **Branch:** \`${BRANCH}\`
+          **New rules proposed:** $RULE_COUNT
+
+          ## Scan Results
+          \`\`\`
+          $SUMMARY
+          \`\`\`
+
+          ## Action Required
+          1. Review the branch: \`${BRANCH}\`
+          2. Check proposed rules:
+             \`policies/opa/research-proposals.rego\`
+          3. If rules look good, open a PR manually:
+             - Base: main
+             - Compare: ${BRANCH}
+          4. Close this issue when merged or dismissed
+
+          ## Files Changed
+          - \`policies/research/update-log.md\`
+          - \`policies/opa/research-proposals.rego\`
+
+          > This issue was auto-created by the
+          > Research Agent because GitHub Enterprise
+          > Cloud policy prevents Actions from
+          > opening PRs directly." \
+            --label "research-proposal" \
+            --label "needs-human-review")
+
+          ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oE '[0-9]+$' || echo "")
+          echo "issue_url=${ISSUE_URL}" >> "$GITHUB_OUTPUT"
+          echo "issue_number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "✅ Issue created: $ISSUE_URL" > $GITHUB_STEP_SUMMARY
+          echo "Branch: ${BRANCH}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Commit log update (no gaps — no PR needed)
+        if: steps.gap_analysis.outputs.gaps_count == '0'
+        run: |
+          git config user.name  "Research Agent"
+          git config user.email "research-agent@github-actions.bot"
+          git add policies/research/update-log.md policies/research/current-scan-summary.md
+          git diff --cached --quiet || \
+            git commit -m "[Research Agent] No-op scan — $(date +%Y-%m-%d): 0 gaps found"
+          git push origin HEAD
+
+      - name: Output summary
+        run: |
+          echo "## Research Agent Scan Complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Trigger | ${{ steps.trigger.outputs.trigger }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Gaps found | ${{ steps.gap_analysis.outputs.gaps_count }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Covered | ${{ steps.gap_analysis.outputs.covered_count }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Log | \`policies/research/update-log.md\` |" >> "$GITHUB_STEP_SUMMARY"
+
+      # ------------------------------------------------------------------
+      # Self-healing: classify outcome → auto-assign Copilot
+      # ------------------------------------------------------------------
+
+      - name: Classify scan outcome
+        id: classify
+        if: always()
+        run: |
+          # Preliminary classification in bash; the Python health-check script
+          # may upgrade "clean" to "stats_mismatch" after reading the issue body.
+          CATEGORY="clean"
+
+          SCAN_OUTCOME="${{ steps.gap_analysis.outcome }}"
+          CONN_STATUS="${{ steps.connection_test.outputs.connection_status }}"
+          FAILING_SRCS="${{ steps.connection_test.outputs.failing_sources }}"
+
+          if [ "$SCAN_OUTCOME" = "cancelled" ]; then
+            CATEGORY="session_cancelled"
+          elif [ "$CONN_STATUS" = "failed" ] || [ -n "$FAILING_SRCS" ]; then
+            CATEGORY="api_unreachable"
+          elif [ "$SCAN_OUTCOME" = "failure" ]; then
+            CATEGORY="unknown_anomaly"
+          fi
+
+          echo "category=${CATEGORY}" >> "$GITHUB_OUTPUT"
+          echo "## Scan Outcome Classification" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Category | \`${CATEGORY}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Failing sources | ${FAILING_SRCS:-none} |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run scan health check
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          SCAN_CATEGORY: ${{ steps.classify.outputs.category }}
+          FAILING_SOURCES: ${{ steps.connection_test.outputs.failing_sources }}
+          GAPS_COUNT: ${{ steps.gap_analysis.outputs.gaps_count }}
+          ISSUE_NUMBER: ${{ steps.create_issue.outputs.issue_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 scripts/scan_health_check.py

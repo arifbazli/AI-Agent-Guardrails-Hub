@@ -1,0 +1,463 @@
+# ============================================================
+# Harness Pipeline Approval Workflow Rules
+# File: policies/pipeline/approval-rules.yaml
+# Version: 1.0.0
+# Last Updated: 2026-06-08
+#
+# Defines approval requirements, approver groups, auto-approval
+# conditions, escalation rules, rejection handling, emergency
+# bypass procedures, and audit trail requirements for every
+# environment in the Harness CI/CD pipeline.
+# ============================================================
+
+apiVersion: harness.io/v1
+kind: ApprovalPolicy
+metadata:
+  name: harness-approval-rules
+  description: >
+    Comprehensive approval workflow rules covering dev, staging,
+    UAT, and production environments with escalation, bypass,
+    and audit trail requirements.
+  owner: platform-engineering
+  cost-centre: deloitte-cloud-services
+
+# pipeline block included so that OPA rules PG-008 and PG-009 (which
+# traverse input.pipeline.description and input.pipeline.tags) resolve
+# correctly when this file is evaluated against pipeline-guardrails.rego.
+pipeline:
+  description: >
+    Comprehensive approval workflow rules covering dev, staging,
+    UAT, and production environments with escalation, bypass,
+    and audit trail requirements.
+  tags:
+    owner: platform-engineering
+    cost-centre: deloitte-cloud-services
+
+# ---------------------------------------------------------------------------
+# GLOBAL DEFAULTS
+# Applied to all approval rules unless overridden at the environment level.
+# ---------------------------------------------------------------------------
+defaults:
+  auditTrail:
+    enabled: true
+    retentionDays: 365
+    captureFields:
+      - approverIdentity
+      - approvalTimestamp
+      - approvalComments
+      - pipelineRunId
+      - artifactDigest
+      - changeTicketId
+      - ipAddress
+  notifyOnApprovalRequest:
+    channels:
+      - type: slack
+        webhook: <+secrets.getValue("slack-webhook-approvals")>
+      - type: email
+  reminderInterval: 30m
+
+# ---------------------------------------------------------------------------
+# ENVIRONMENT APPROVAL RULES
+# ---------------------------------------------------------------------------
+environments:
+
+  # -------------------------------------------------------------------------
+  # ENVIRONMENT: DEV
+  # -------------------------------------------------------------------------
+  - id: env-dev
+    name: Development
+    description: >
+      Continuous deployment to dev is largely automated with minimal
+      manual oversight, enabling fast iteration cycles.
+
+    approvalRequired: false
+
+    autoApproval:
+      enabled: true
+      conditions:
+        - description: Auto-approve all deployments to dev from feature branches
+          condition: "pipeline.gitBranch =~ '^(feature/|fix/|chore/|copilot/)'"
+        - description: Auto-approve scheduled pipeline runs tagged for dev
+          condition: "pipeline.triggerType == 'SCHEDULED' && pipeline.tags['env'] == 'dev'"
+      actingApprover: system-auto-approver
+
+    escalation:
+      enabled: false
+
+    rejectionHandling:
+      allowResubmission: true
+      resubmissionCooldownMinutes: 0
+      maxResubmissions: unlimited
+
+    auditTrail:
+      enabled: true
+      retentionDays: 90
+
+    notifications:
+      onDeployment:
+        message: "🚀 DEV deployment triggered — Pipeline: <+pipeline.name> | Branch: <+pipeline.gitBranch>"
+        channels: [slack]
+
+  # -------------------------------------------------------------------------
+  # ENVIRONMENT: STAGING
+  # -------------------------------------------------------------------------
+  - id: env-staging
+    name: Staging
+    description: >
+      Staging mirrors production configuration. Requires at least one
+      approval from the staging-approvers group. Auto-approval is
+      permitted for scheduled low-risk maintenance deployments.
+
+    approvalRequired: true
+
+    approvalRequirements:
+      minimumApprovers: 1
+      requiredGroups:
+        - id: staging-approvers
+          description: Platform engineers and tech leads responsible for staging
+          minimumFromGroup: 1
+      selfApprovalAllowed: false
+      approvalTimeout: 4h
+
+    autoApproval:
+      enabled: true
+      conditions:
+        - description: >
+            Auto-approve scheduled deployments during maintenance window
+            (Saturday 02:00–05:00 UTC) tagged as low-risk.
+          condition: >
+            pipeline.triggerType == 'SCHEDULED' &&
+            pipeline.tags['risk-level'] == 'low' &&
+            pipeline.executionTime.dayOfWeek == 'SATURDAY' &&
+            pipeline.executionTime.hourUTC >= 2 &&
+            pipeline.executionTime.hourUTC < 5
+        - description: >
+            Auto-approve hotfix branches where a change ticket in APPROVED state
+            exists. Uses an externally-verified source (ServiceNow/Jira) to
+            prevent self-assignment of the approved flag by the pipeline author.
+          condition: >
+            pipeline.gitBranch =~ '^hotfix/' &&
+            pipeline.tags['risk-level'] == 'low' &&
+            pipeline.variables.changeTicketStatus == 'APPROVED' &&
+            pipeline.variables.changeTicketApprover != pipeline.triggeredBy
+      actingApprover: system-auto-approver
+
+    escalation:
+      enabled: true
+      rules:
+        - after: 2h
+          action: REMIND
+          notify:
+            userGroups: [staging-approvers]
+            message: >
+              ⚠️ REMINDER: Staging approval pending for <+pipeline.name>.
+              Approval will escalate in 2 hours.
+            channels: [slack, email]
+        - after: 4h
+          action: ESCALATE
+          notify:
+            users:
+              - tech-lead@deloitte.com
+            message: >
+              🚨 ESCALATION: Staging approval for <+pipeline.name> has timed out.
+              Please review and approve or reject immediately.
+            channels: [slack, email]
+          fallbackAction: REJECT
+
+    rejectionHandling:
+      allowResubmission: true
+      resubmissionCooldownMinutes: 30
+      maxResubmissions: 3
+      requireCommentOnReject: true
+      requireCommentOnResubmit: true
+      notifyOnRejection:
+        message: >
+          ❌ STAGING APPROVAL REJECTED — Pipeline: <+pipeline.name> |
+          Reason: <+approval.rejectComment>
+        channels: [slack, email]
+        recipients:
+          - pipeline.triggeredBy
+
+    auditTrail:
+      enabled: true
+      retentionDays: 180
+
+    notifications:
+      onApprovalRequest:
+        message: >
+          🔔 STAGING APPROVAL REQUIRED — Pipeline: <+pipeline.name> |
+          Triggered by: <+pipeline.triggeredBy> |
+          Approve here: <+pipeline.approvalUrl>
+        channels: [slack, email]
+        userGroups: [staging-approvers]
+      onApproval:
+        message: "✅ STAGING APPROVED by <+approval.approvedBy> — Pipeline: <+pipeline.name>"
+        channels: [slack]
+
+  # -------------------------------------------------------------------------
+  # ENVIRONMENT: UAT
+  # -------------------------------------------------------------------------
+  - id: env-uat
+    name: UAT (User Acceptance Testing)
+    description: >
+      UAT requires sign-off from both the platform engineering team and
+      the business/QA team before a release can progress to production.
+
+    approvalRequired: true
+
+    approvalRequirements:
+      minimumApprovers: 2
+      requiredGroups:
+        - id: uat-platform-approvers
+          description: Platform engineering representatives
+          minimumFromGroup: 1
+        - id: uat-business-approvers
+          description: Business analysts and QA leads
+          minimumFromGroup: 1
+      selfApprovalAllowed: false
+      approvalTimeout: 24h
+      requireApprovalComments: true
+
+    autoApproval:
+      enabled: false
+
+    escalation:
+      enabled: true
+      rules:
+        - after: 8h
+          action: REMIND
+          notify:
+            userGroups: [uat-platform-approvers, uat-business-approvers]
+            message: >
+              ⚠️ REMINDER: UAT approval pending for <+pipeline.name>.
+              8 hours elapsed — please review.
+            channels: [slack, email]
+        - after: 16h
+          action: REMIND
+          notify:
+            userGroups: [uat-platform-approvers, uat-business-approvers]
+            message: >
+              ⚠️ SECOND REMINDER: UAT approval for <+pipeline.name>
+              has been pending for 16 hours. Timeout in 8 hours.
+            channels: [slack, email]
+        - after: 24h
+          action: ESCALATE
+          notify:
+            users:
+              - delivery-manager@deloitte.com
+              - tech-lead@deloitte.com
+            message: >
+              🚨 ESCALATION: UAT approval for <+pipeline.name> has timed out (24h).
+              Delivery manager action required.
+            channels: [slack, email]
+          fallbackAction: REJECT
+
+    rejectionHandling:
+      allowResubmission: true
+      resubmissionCooldownMinutes: 60
+      maxResubmissions: 2
+      requireCommentOnReject: true
+      requireCommentOnResubmit: true
+      notifyOnRejection:
+        message: >
+          ❌ UAT APPROVAL REJECTED — Pipeline: <+pipeline.name> |
+          Rejected by: <+approval.rejectedBy> |
+          Reason: <+approval.rejectComment>
+        channels: [slack, email]
+        recipients:
+          - pipeline.triggeredBy
+          - delivery-manager@deloitte.com
+
+    auditTrail:
+      enabled: true
+      retentionDays: 365
+
+    notifications:
+      onApprovalRequest:
+        message: >
+          🔔 UAT APPROVAL REQUIRED — Pipeline: <+pipeline.name> |
+          Artifact: <+pipeline.artifacts.primary.tag> |
+          Triggered by: <+pipeline.triggeredBy> |
+          Approve here: <+pipeline.approvalUrl>
+        channels: [slack, email]
+        userGroups: [uat-platform-approvers, uat-business-approvers]
+      onApproval:
+        message: >
+          ✅ UAT APPROVED — Pipeline: <+pipeline.name> |
+          Approvers: <+approval.approverList>
+        channels: [slack, email]
+
+  # -------------------------------------------------------------------------
+  # ENVIRONMENT: PRODUCTION
+  # -------------------------------------------------------------------------
+  - id: env-production
+    name: Production
+    description: >
+      Production deployments require the strictest controls. A minimum
+      of two approvers from distinct mandatory groups must approve.
+      Change freeze windows, deployment time restrictions, and a valid
+      change ticket are enforced as pre-conditions.
+
+    approvalRequired: true
+
+    approvalRequirements:
+      minimumApprovers: 2
+      requiredGroups:
+        - id: production-approvers
+          description: Senior platform engineers and release managers
+          minimumFromGroup: 1
+        - id: security-approvers
+          description: Security and compliance team members
+          minimumFromGroup: 1
+      selfApprovalAllowed: false
+      approvalTimeout: 8h
+      requireApprovalComments: true
+      requireChangeTicket: true
+      changeTicketSources:
+        - ServiceNow
+        - Jira
+      changeTicketRequiredStatus: APPROVED
+      deploymentWindowRequired: true
+      deploymentWindow:
+        daysOfWeek: [MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY]
+        hoursUTC:
+          start: 7
+          end: 21
+        excludeChangeFreezeWindows: true
+
+    autoApproval:
+      enabled: false
+      # Auto-approval is strictly disabled for production.
+      # Emergency deployments must follow the emergency bypass process below.
+
+    escalation:
+      enabled: true
+      rules:
+        - after: 2h
+          action: REMIND
+          notify:
+            userGroups: [production-approvers, security-approvers]
+            message: >
+              ⚠️ REMINDER: Production approval pending for <+pipeline.name>.
+              Change ticket: <+pipeline.variables.changeTicketId>.
+              Please review urgently.
+            channels: [slack, email]
+        - after: 4h
+          action: ESCALATE
+          notify:
+            users:
+              - vp-engineering@deloitte.com
+              - ciso@deloitte.com
+            message: >
+              🚨 ESCALATION: Production approval for <+pipeline.name>
+              has been pending for 4 hours. VP Engineering and CISO action required.
+            channels: [slack, email]
+        - after: 8h
+          action: ESCALATE
+          notify:
+            users:
+              - vp-engineering@deloitte.com
+              - ciso@deloitte.com
+            message: >
+              🚨 CRITICAL: Production approval for <+pipeline.name> has timed out (8h).
+              Pipeline will be rejected automatically.
+            channels: [slack, email]
+          fallbackAction: REJECT
+
+    rejectionHandling:
+      allowResubmission: true
+      resubmissionCooldownMinutes: 120
+      maxResubmissions: 2
+      requireCommentOnReject: true
+      requireCommentOnResubmit: true
+      requireNewChangeTicketOnResubmit: true
+      notifyOnRejection:
+        message: >
+          ❌ PRODUCTION APPROVAL REJECTED — Pipeline: <+pipeline.name> |
+          Rejected by: <+approval.rejectedBy> |
+          Reason: <+approval.rejectComment> |
+          Change ticket: <+pipeline.variables.changeTicketId>
+        channels: [slack, email]
+        recipients:
+          - pipeline.triggeredBy
+          - vp-engineering@deloitte.com
+          - release-management@deloitte.com
+
+    emergencyBypass:
+      enabled: true
+      description: >
+        Emergency bypass allows a production deployment to proceed outside
+        normal approval requirements during a declared P0/P1 incident.
+        All bypasses are fully audited, time-limited, and require dual
+        authorisation from VP Engineering and the CISO.
+      requirements:
+        - A declared incident ticket (P0 or P1) must be referenced
+        - Dual authorisation required from VP Engineering AND CISO (or delegates)
+        - Bypass is valid for a single pipeline run only
+        - Post-deployment review must be completed within 24 hours
+      authorisedBypassApprovers:
+        - vp-engineering@deloitte.com
+        - ciso@deloitte.com
+      bypassAudit:
+        mandatory: true
+        captureFields:
+          - bypassAuthoriser
+          - bypassTimestamp
+          - incidentTicketId
+          - justification
+          - pipelineRunId
+          - artifactDigest
+        notifyOnBypass:
+          message: >
+            🚨 EMERGENCY BYPASS ACTIVATED — Pipeline: <+pipeline.name> |
+            Authorised by: <+approval.bypassAuthoriser> |
+            Incident: <+pipeline.variables.incidentTicketId> |
+            Justification: <+approval.bypassJustification>
+          channels: [slack, email]
+          recipients:
+            - vp-engineering@deloitte.com
+            - ciso@deloitte.com
+            - audit-trail@deloitte.com
+        postDeploymentReview:
+          required: true
+          dueWithinHours: 24
+          assignedTo: [vp-engineering@deloitte.com, release-management@deloitte.com]
+
+    auditTrail:
+      enabled: true
+      retentionDays: 2557  # 7 years for regulatory compliance (365×7 + 2 leap days)
+      immutable: true
+      captureAdditionalFields:
+        - changeTicketId
+        - changeTicketStatus
+        - deploymentWindowCompliant
+        - changeFreezeActive
+        - rollbackArtifactDigest
+        - emergencyBypassUsed
+      exportTo:
+        - type: splunk
+          index: harness-prod-approvals
+          webhook: <+secrets.getValue("splunk-hec-webhook")>
+        - type: s3
+          bucket: deloitte-audit-trail-prod
+          prefix: harness/approvals/production/
+
+    notifications:
+      onApprovalRequest:
+        message: >
+          🔔 PRODUCTION APPROVAL REQUIRED — Pipeline: <+pipeline.name> |
+          Artifact: <+pipeline.artifacts.primary.tag> |
+          Change ticket: <+pipeline.variables.changeTicketId> |
+          Triggered by: <+pipeline.triggeredBy> |
+          Approve here: <+pipeline.approvalUrl>
+        channels: [slack, email]
+        userGroups: [production-approvers, security-approvers]
+      onApproval:
+        message: >
+          ✅ PRODUCTION APPROVED — Pipeline: <+pipeline.name> |
+          Approvers: <+approval.approverList> |
+          Change ticket: <+pipeline.variables.changeTicketId>
+        channels: [slack, email]
+        recipients:
+          - pipeline.triggeredBy
+          - release-management@deloitte.com

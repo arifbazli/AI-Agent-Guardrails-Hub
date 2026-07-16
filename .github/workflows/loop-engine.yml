@@ -1,0 +1,471 @@
+name: Loop Engine — Auto-Fix Pipeline
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+# Queue runs per PR instead of cancelling in-progress ones, so validation
+# steps (codeql, code_review) always complete before the next run starts.
+# Without this, a synchronize push mid-session would cancel the current run.
+concurrency:
+  group: loop-engine-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  OPA_VERSION: "v0.68.0"
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Harness OPA Loop
+  # --------------------------------------------------------------------------
+  harness-loop:
+    name: Harness OPA Loop
+    runs-on: ubuntu-latest
+    if: |
+      github.actor != 'github-actions[bot]' &&
+      github.actor != 'copilot-swe-agent[bot]' &&
+      github.actor != 'dependabot[bot]'
+
+    steps:
+      - name: Ensure required labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          labels=(
+            "automated|0075ca|Auto-created by Research Agent"
+            "research-proposal|e4e669|Research Agent policy proposal"
+            "loop-engine-escalation|d93f0b|Loop Engine escalation"
+            "needs-human-review|e99695|Requires manual review"
+            "health-check-failure|b60205|Health check failed"
+          )
+          for label in "${labels[@]}"; do
+            NAME=$(echo "$label" | cut -d'|' -f1)
+            COLOR=$(echo "$label" | cut -d'|' -f2)
+            DESC=$(echo "$label" | cut -d'|' -f3)
+            gh label create "$NAME" \
+              --color "$COLOR" \
+              --description "$DESC" \
+              --force 2>/dev/null || true
+            echo "✅ $NAME"
+          done
+          echo "All labels verified" > $GITHUB_STEP_SUMMARY
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "Loop Engine"
+          git config user.email "loop-engine@noreply.github.com"
+
+      - name: Install OPA
+        run: |
+          curl -sL \
+            https://github.com/open-policy-agent/opa/releases/download/${{ env.OPA_VERSION }}/opa_linux_amd64_static \
+            -o /usr/local/bin/opa
+          chmod +x /usr/local/bin/opa
+          opa version
+
+      - name: Export OPA path
+        run: |
+          echo "OPA_PATH=/usr/local/bin/opa" >> $GITHUB_ENV
+
+      - name: Setup Python
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyyaml requests \
+            --break-system-packages
+
+      - name: Run Harness OPA evaluation
+        id: harness_eval
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 scripts/loop_engine.py \
+            --pipeline harness \
+            --max-attempts 3 \
+            --auto-fix true \
+            --pr-branch "${{ github.head_ref }}" \
+            --pr-number "${{ github.event.pull_request.number }}"
+        continue-on-error: true
+
+      - name: Commit Harness auto-fixes
+        run: |
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No Harness fixes to commit"
+            exit 0
+          fi
+          git commit -m \
+            "[Loop Engine] Harness auto-fix — $(date +%Y-%m-%d)"
+          for i in 1 2 3; do
+            if git pull --rebase origin \
+                ${{ github.head_ref }} && \
+               git push origin \
+                HEAD:${{ github.head_ref }}; then
+              break
+            fi
+            echo "Push attempt $i failed, retrying..."
+            sleep 5
+          done
+
+      - name: Post Harness compliance report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/loop_engine.py \
+            --action post-report \
+            --pipeline harness \
+            --pr-number \
+              "${{ github.event.pull_request.number }}"
+
+      - name: Escalate if Harness loop failed
+        if: steps.harness_eval.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "🚨 Loop Engine: Harness escalation — PR #${{ github.event.pull_request.number }}" \
+            --body "## Loop Engine Escalation
+
+          Pipeline: Harness OPA
+          PR: ${{ github.event.pull_request.html_url }}
+          Branch: ${{ github.head_ref }}
+          Date: $(date)
+
+          Auto-fix failed after 3 attempts.
+          Please review and fix manually.
+
+          Check loop-log.md for full history." \
+            --label "loop-engine-escalation,needs-human-review"
+
+  # --------------------------------------------------------------------------
+  # Pi Workflow Loop
+  # --------------------------------------------------------------------------
+  pi-loop:
+    name: Pi Workflow Loop
+    runs-on: ubuntu-latest
+    needs: [harness-loop]
+    if: |
+      always() &&
+      github.actor != 'github-actions[bot]' &&
+      github.actor != 'copilot-swe-agent[bot]' &&
+      github.actor != 'dependabot[bot]'
+
+    steps:
+      - name: Ensure required labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          labels=(
+            "automated|0075ca|Auto-created by Research Agent"
+            "research-proposal|e4e669|Research Agent policy proposal"
+            "loop-engine-escalation|d93f0b|Loop Engine escalation"
+            "needs-human-review|e99695|Requires manual review"
+            "health-check-failure|b60205|Health check failed"
+          )
+          for label in "${labels[@]}"; do
+            NAME=$(echo "$label" | cut -d'|' -f1)
+            COLOR=$(echo "$label" | cut -d'|' -f2)
+            DESC=$(echo "$label" | cut -d'|' -f3)
+            gh label create "$NAME" \
+              --color "$COLOR" \
+              --description "$DESC" \
+              --force 2>/dev/null || true
+            echo "✅ $NAME"
+          done
+          echo "All labels verified" > $GITHUB_STEP_SUMMARY
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "Loop Engine"
+          git config user.email "loop-engine@noreply.github.com"
+
+      - name: Install OPA
+        run: |
+          curl -sL \
+            https://github.com/open-policy-agent/opa/releases/download/${{ env.OPA_VERSION }}/opa_linux_amd64_static \
+            -o /usr/local/bin/opa
+          chmod +x /usr/local/bin/opa
+          opa version
+
+      - name: Export OPA path
+        run: |
+          echo "OPA_PATH=/usr/local/bin/opa" >> $GITHUB_ENV
+
+      - name: Setup Python
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyyaml requests autopep8 \
+            --break-system-packages
+
+      - name: Run Pi evaluation
+        id: pi_eval
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 scripts/loop_engine.py \
+            --pipeline pi \
+            --max-attempts 3 \
+            --auto-fix true \
+            --pr-branch "${{ github.head_ref }}" \
+            --pr-number "${{ github.event.pull_request.number }}"
+        continue-on-error: true
+
+      - name: Commit Pi auto-fixes
+        run: |
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No Pi fixes to commit"
+            exit 0
+          fi
+          git commit -m \
+            "[Loop Engine] Pi auto-fix — $(date +%Y-%m-%d)"
+          for i in 1 2 3; do
+            if git pull --rebase origin \
+                ${{ github.head_ref }} && \
+               git push origin \
+                HEAD:${{ github.head_ref }}; then
+              break
+            fi
+            echo "Push attempt $i failed, retrying..."
+            sleep 5
+          done
+
+      - name: Post Pi compliance report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/loop_engine.py \
+            --action post-report \
+            --pipeline pi \
+            --pr-number \
+              "${{ github.event.pull_request.number }}"
+
+      - name: Escalate if Pi loop failed
+        if: steps.pi_eval.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "🚨 Loop Engine: Pi escalation — PR #${{ github.event.pull_request.number }}" \
+            --body "## Loop Engine Escalation
+
+          Pipeline: Pi Workflow
+          PR: ${{ github.event.pull_request.html_url }}
+          Branch: ${{ github.head_ref }}
+          Date: $(date)
+
+          Auto-fix failed after 3 attempts.
+          Please review and fix manually.
+
+          Check loop-log.md for full history." \
+            --label "loop-engine-escalation,needs-human-review"
+
+  # --------------------------------------------------------------------------
+  # Research Agent Loop (runs after pi-loop)
+  # --------------------------------------------------------------------------
+  research-loop:
+    name: Research Agent Loop
+    runs-on: ubuntu-latest
+    needs: [pi-loop]
+    if: |
+      always() &&
+      github.actor != 'github-actions[bot]' &&
+      github.actor != 'copilot-swe-agent[bot]' &&
+      github.actor != 'dependabot[bot]'
+
+    steps:
+      - name: Ensure required labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          labels=(
+            "automated|0075ca|Auto-created by Research Agent"
+            "research-proposal|e4e669|Research Agent policy proposal"
+            "loop-engine-escalation|d93f0b|Loop Engine escalation"
+            "needs-human-review|e99695|Requires manual review"
+            "health-check-failure|b60205|Health check failed"
+          )
+          for label in "${labels[@]}"; do
+            NAME=$(echo "$label" | cut -d'|' -f1)
+            COLOR=$(echo "$label" | cut -d'|' -f2)
+            DESC=$(echo "$label" | cut -d'|' -f3)
+            gh label create "$NAME" \
+              --color "$COLOR" \
+              --description "$DESC" \
+              --force 2>/dev/null || true
+            echo "✅ $NAME"
+          done
+          echo "All labels verified" > $GITHUB_STEP_SUMMARY
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "Loop Engine"
+          git config user.email "loop-engine@noreply.github.com"
+
+      - name: Install OPA
+        run: |
+          curl -sL \
+            https://github.com/open-policy-agent/opa/releases/download/${{ env.OPA_VERSION }}/opa_linux_amd64_static \
+            -o /usr/local/bin/opa
+          chmod +x /usr/local/bin/opa
+          opa version
+
+      - name: Export OPA path
+        run: |
+          echo "OPA_PATH=/usr/local/bin/opa" >> $GITHUB_ENV
+
+      - name: Setup Python
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyyaml requests \
+            --break-system-packages
+
+      - name: Validate research proposals
+        id: research_eval
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 scripts/loop_engine.py \
+            --pipeline research \
+            --max-attempts 3 \
+            --auto-fix true \
+            --pr-branch "${{ github.head_ref }}" \
+            --pr-number "${{ github.event.pull_request.number }}"
+        continue-on-error: true
+
+      - name: Commit research fixes
+        run: |
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No research fixes to commit"
+            exit 0
+          fi
+          git commit -m \
+            "[Loop Engine] Research auto-fix — $(date +%Y-%m-%d)"
+          for i in 1 2 3; do
+            if git pull --rebase origin \
+                ${{ github.head_ref }} && \
+               git push origin \
+                HEAD:${{ github.head_ref }}; then
+              break
+            fi
+            echo "Push attempt $i failed, retrying..."
+            sleep 5
+          done
+
+  # --------------------------------------------------------------------------
+  # Loop Engine Summary
+  # --------------------------------------------------------------------------
+  loop-summary:
+    name: Loop Engine Summary
+    runs-on: ubuntu-latest
+    needs: [harness-loop, pi-loop, research-loop]
+    if: always()
+
+    steps:
+      - name: Ensure required labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          labels=(
+            "automated|0075ca|Auto-created by Research Agent"
+            "research-proposal|e4e669|Research Agent policy proposal"
+            "loop-engine-escalation|d93f0b|Loop Engine escalation"
+            "needs-human-review|e99695|Requires manual review"
+            "health-check-failure|b60205|Health check failed"
+          )
+          for label in "${labels[@]}"; do
+            NAME=$(echo "$label" | cut -d'|' -f1)
+            COLOR=$(echo "$label" | cut -d'|' -f2)
+            DESC=$(echo "$label" | cut -d'|' -f3)
+            gh label create "$NAME" \
+              --color "$COLOR" \
+              --description "$DESC" \
+              --force 2>/dev/null || true
+            echo "✅ $NAME"
+          done
+          echo "All labels verified" > $GITHUB_STEP_SUMMARY
+
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Post summary to PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          HARNESS="${{ needs.harness-loop.result }}"
+          PI="${{ needs.pi-loop.result }}"
+          RESEARCH="${{ needs.research-loop.result }}"
+
+          if [ "$HARNESS" = "success" ] && \
+             [ "$PI" = "success" ] && \
+             [ "$RESEARCH" = "success" ]; then
+            STATUS="✅ ALL LOOPS PASSED"
+          else
+            STATUS="⚠️ SOME LOOPS ESCALATED"
+          fi
+
+          gh pr comment \
+            ${{ github.event.pull_request.number }} \
+            --body "## 🔁 Loop Engine Summary
+
+          **Status:** $STATUS
+          **PR:** #${{ github.event.pull_request.number }}
+          **Date:** $(date)
+
+          | Pipeline | Result |
+          |---|---|
+          | Harness OPA Loop | $HARNESS |
+          | Pi Workflow Loop | $PI |
+          | Research Loop | $RESEARCH |
+
+          > Loop Engine ran automatically on
+          > this human-opened PR.
+          > Check loop-log.md for full history."

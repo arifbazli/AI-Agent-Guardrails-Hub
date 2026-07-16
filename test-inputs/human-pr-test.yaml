@@ -1,0 +1,27 @@
+pipeline:
+  tags:
+    owner: please-update
+    cost-centre: please-update
+  name: human-pr-test
+  description: "Auto-generated description - please update before merge"
+  stages:
+    - stage:
+        name: deploy
+        type: Deployment
+        spec:
+          environment:
+            type: Production
+          execution:
+            steps:
+              - step:
+                  name: run
+                  type: Run
+                  spec:
+                    image: bad.registry.io/app:latest
+                    envVariables:
+                      # DELIBERATE TEST VIOLATION: plaintext secret used to trigger
+                      # the Loop Engine OPA policy check (no real credential).
+                      SECRET: plaintext123
+          infrastructure:
+            spec:
+              delegateSelectors: []

@@ -1,0 +1,75 @@
+# ============================================================
+# Threat Intelligence Feed Configuration
+# File: policies/research/threat-feed.yaml
+# Version: 1.0.0
+# Last Updated: 2026-06-22
+#
+# Defines the external threat intelligence sources consumed by
+# the Research Agent (scripts/research_agent.py).
+# Test connectivity with: python scripts/research_agent.py --test-connections
+# ============================================================
+
+feeds:
+
+  # --------------------------------------------------------------------------
+  # National Vulnerability Database (NVD) — NIST
+  # CVE data with CVSS scores; 30-day lookback window used by Research Agent.
+  # Authenticate by setting the NIST_API_KEY environment secret (optional but
+  # recommended to avoid rate limiting).
+  # --------------------------------------------------------------------------
+  nvd:
+    name: NVD CVE Feed
+    url: https://services.nvd.nist.gov/rest/json/cves/2.0
+    enabled: true
+    schedule: weekly
+    lookback_days: 30
+    auth:
+      type: api_key
+      env_var: NIST_API_KEY
+      required: false   # public access available without key (rate-limited)
+
+  # --------------------------------------------------------------------------
+  # CISA Known Exploited Vulnerabilities (KEV) Catalogue
+  # Actively exploited CVEs that should be treated as CRITICAL regardless of
+  # CVSS score.
+  # --------------------------------------------------------------------------
+  cisa_kev:
+    name: CISA KEV Catalogue
+    url: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+    enabled: true
+    schedule: weekly
+    auth:
+      type: none
+
+  # --------------------------------------------------------------------------
+  # OWASP Top 10
+  # Manual monitoring — automated JSON feed not yet available.
+  # Review https://owasp.org/www-project-top-ten/ during quarterly review.
+  # --------------------------------------------------------------------------
+  owasp:
+    name: OWASP Top 10
+    url: https://owasp.org/www-project-top-ten/
+    enabled: false      # automated fetch not yet implemented
+    schedule: monthly
+    auth:
+      type: none
+    notes: >
+      Manual monitoring only. Review quarterly and update policies/opa/
+      rules as needed. See docs/MAINTENANCE.md Section 4.
+
+  # --------------------------------------------------------------------------
+  # Harness Release Notes
+  # Manual monitoring — no structured API available.
+  # Review https://developer.harness.io/release-notes/ during quarterly review.
+  # --------------------------------------------------------------------------
+  harness_releases:
+    name: Harness Release Notes
+    url: https://developer.harness.io/release-notes/
+    enabled: false      # automated fetch not yet implemented
+    schedule: weekly
+    auth:
+      type: none
+    notes: >
+      Manual monitoring only. Check for delegate version updates that
+      require refreshing the approved_delegate_versions list in
+      policies/opa/delegate-validation.rego (DV-002).

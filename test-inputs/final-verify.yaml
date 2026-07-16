@@ -1,0 +1,35 @@
+pipeline:
+  name: final-loop-verify
+  description: "Final verification pipeline for loop engine compliance checks"
+  tags:
+    owner: platform-engineering
+    cost-centre: deloitte-cloud-services
+  stages:
+    - name: deploy-production
+      type: Deployment
+      timeout: 1h
+      spec:
+        infrastructure:
+          environment:
+            type: Production
+          spec:
+            delegateSelectors:
+              - org-approved
+        execution:
+          steps:
+            - step:
+                name: approval-gate
+                type: HarnessApproval
+                spec: {}
+            - step:
+                name: deploy
+                type: Run
+                spec:
+                  image: gcr.io/deloitte-gcs/app:latest
+                  envVariables:
+                    SECRET: <+secrets.getValue("auto-migrated-secret")>  # AUTO-FIXED by Loop Engine
+          rollbackSteps:
+            - step:
+                name: auto-rollback
+                type: HelmRollback
+                spec: {}

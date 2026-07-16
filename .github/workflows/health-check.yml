@@ -1,0 +1,182 @@
+name: System Health Check
+
+on:
+  schedule:
+    - cron: '0 */12 * * *'
+  workflow_dispatch:
+    inputs:
+      force_failure:
+        description: 'Force a failure to test issue creation'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  OPA_VERSION: "v0.68.0"
+
+jobs:
+  health-check:
+    name: Full System Health Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ensure required labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          labels=(
+            "automated|0075ca|Auto-created by Research Agent"
+            "research-proposal|e4e669|Research Agent policy proposal"
+            "loop-engine-escalation|d93f0b|Loop Engine escalation"
+            "needs-human-review|e99695|Requires manual review"
+            "health-check-failure|b60205|Health check failed"
+          )
+          for label in "${labels[@]}"; do
+            NAME=$(echo "$label" | cut -d'|' -f1)
+            COLOR=$(echo "$label" | cut -d'|' -f2)
+            DESC=$(echo "$label" | cut -d'|' -f3)
+            gh label create "$NAME" \
+              --color "$COLOR" \
+              --description "$DESC" \
+              --force 2>/dev/null || true
+            echo "✅ $NAME"
+          done
+          echo "All labels verified" > $GITHUB_STEP_SUMMARY
+
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Install OPA
+        run: |
+          curl -sL \
+            https://github.com/open-policy-agent/opa/releases/download/${{ env.OPA_VERSION }}/opa_linux_amd64_static \
+            -o /usr/local/bin/opa
+          chmod +x /usr/local/bin/opa
+
+      - name: Check agents
+        run: |
+          echo "## 🤖 Agent Health" >> $GITHUB_STEP_SUMMARY
+          for agent in \
+            Benchmark-agent.md \
+            guardrail-agent.md \
+            pi-guardrail-agent.md \
+            research-agent.md; do
+            if [ -f ".github/agents/$agent" ]; then
+              echo "✅ $agent" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ $agent MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+      - name: Check policy files
+        run: |
+          echo "## 📋 Policy File Health" >> $GITHUB_STEP_SUMMARY
+          MISSING=0
+          for policy in \
+            policies/opa/pipeline-guardrails.rego \
+            policies/opa/code-security.rego \
+            policies/opa/connector-compliance.rego \
+            policies/opa/delegate-validation.rego \
+            policies/pi/bash-security.rego \
+            policies/pi/code-standards.rego \
+            policies/pi/workflow-gates.rego; do
+            if [ -f "$policy" ]; then
+              echo "✅ $policy" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ $policy MISSING" >> $GITHUB_STEP_SUMMARY
+              MISSING=$((MISSING + 1))
+            fi
+          done
+          if [ $MISSING -gt 0 ]; then
+            echo "HEALTH_STATUS=FAIL" >> $GITHUB_ENV
+          fi
+
+      - name: Run OPA unit tests
+        run: |
+          echo "## 🧪 OPA Unit Tests" >> $GITHUB_STEP_SUMMARY
+          if opa test policies/opa/ -v; then
+            echo "✅ Harness tests PASS" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Harness tests FAIL" >> $GITHUB_STEP_SUMMARY
+            echo "HEALTH_STATUS=FAIL" >> $GITHUB_ENV
+          fi
+          if opa test policies/pi/ -v; then
+            echo "✅ Pi tests PASS" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Pi tests FAIL" >> $GITHUB_STEP_SUMMARY
+            echo "HEALTH_STATUS=FAIL" >> $GITHUB_ENV
+          fi
+
+      - name: Check loop log activity
+        run: |
+          echo "## 🔁 Loop Engine Activity" >> $GITHUB_STEP_SUMMARY
+          if [ -f "policies/research/loop-log.md" ]; then
+            echo "✅ loop-log.md exists" >> $GITHUB_STEP_SUMMARY
+            tail -10 policies/research/loop-log.md >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ loop-log.md not found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Forced failure test
+        if: github.event.inputs.force_failure == 'true'
+        run: |
+          echo "HEALTH_STATUS=FAIL" >> $GITHUB_ENV
+          echo "FAILURE_REASON=Manual test trigger" >> $GITHUB_ENV
+          echo "## ⚠️ Forced Failure Test" >> $GITHUB_STEP_SUMMARY
+          echo "This is a manual test of the health check escalation system." >> $GITHUB_STEP_SUMMARY
+
+      - name: Create health issue if failing
+        if: env.HEALTH_STATUS == 'FAIL'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REASON="${{ env.FAILURE_REASON }}"
+          if [ -z "$REASON" ]; then
+            REASON="Automated health check failure"
+          fi
+
+          gh label create "health-check-failure" \
+            --color "b60205" \
+            --description "Health check failed" \
+            --force 2>/dev/null || true
+
+          ISSUE_URL=$(gh issue create \
+            --title "🚨 Health Check Failed — $(date '+%Y-%m-%d %H:%M UTC')" \
+            --body "## System Health Check Failed
+
+          **Date:** $(date)
+          **Trigger:** ${{ github.event_name }}
+          **Reason:** $REASON
+          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          ## What To Check
+          - Go to Actions tab for full details
+          - Check policy files still exist
+          - Run OPA tests locally
+          - Review loop-log.md for recent activity
+
+          ## Resolution
+          Once fixed close this issue and confirm next health check passes." \
+            --label "health-check-failure")
+
+          echo "✅ Issue created: $ISSUE_URL" >> $GITHUB_STEP_SUMMARY
+          echo "ISSUE_URL=$ISSUE_URL" >> $GITHUB_ENV
+
+      - name: Post summary
+        if: always()
+        run: |
+          echo "## Health Check Complete" >> $GITHUB_STEP_SUMMARY
+          echo "Status: ${{ env.HEALTH_STATUS || 'PASS' }}" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ env.ISSUE_URL }}" ]; then
+            echo "Issue: ${{ env.ISSUE_URL }}" >> $GITHUB_STEP_SUMMARY
+          fi

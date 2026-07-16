@@ -1,0 +1,25 @@
+pipeline:
+  tags:
+    owner: please-update
+    cost-centre: please-update
+  name: verify-loop-test
+  description: "Auto-generated description - please update before merge"
+  stages:
+    - stage:
+        name: deploy-production
+        type: Deployment
+        spec:
+          environment:
+            type: Production
+          execution:
+            steps:
+              - step:
+                  name: deploy
+                  type: Run
+                  spec:
+                    image: badregistry.io/app:latest
+                    envVariables:
+                      SECRET: plaintext123
+          infrastructure:
+            spec:
+              delegateSelectors: []

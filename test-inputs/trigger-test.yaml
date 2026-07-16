@@ -1,0 +1,26 @@
+pipeline:
+  tags:
+    owner: please-update
+    cost-centre: please-update
+  name: full-pipeline-trigger-test
+  description: "Auto-generated description - please update before merge"
+  stages:
+    - stage:
+        name: deploy-production
+        type: Deployment
+        spec:
+          environment:
+            type: Production
+          execution:
+            steps:
+              - step:
+                  name: deploy-app
+                  type: Run
+                  spec:
+                    image: badregistry.io/app:latest
+                    envVariables:
+                      DB_PASSWORD: plaintext123
+                      API_KEY: hardcoded-key-abc
+          infrastructure:
+            spec:
+              delegateSelectors: []

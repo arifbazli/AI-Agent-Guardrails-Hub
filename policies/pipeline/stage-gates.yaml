@@ -1,0 +1,570 @@
+# ============================================================
+# Harness Pipeline Stage Gate Definitions
+# File: policies/pipeline/stage-gates.yaml
+# Version: 1.0.0
+# Last Updated: 2026-06-08
+#
+# Defines entry/exit criteria, automated conditions, manual
+# approval gates, timeouts, and notification settings for
+# every stage in the Harness CI/CD pipeline.
+# ============================================================
+
+apiVersion: harness.io/v1
+kind: PipelineGatePolicy
+metadata:
+  name: harness-stage-gates
+  description: >
+    Comprehensive stage gate definitions for build, test,
+    security-scan, staging, and production pipeline stages.
+  owner: platform-engineering
+  cost-centre: deloitte-cloud-services
+
+# pipeline block included so that OPA rules PG-008 and PG-009 (which
+# traverse input.pipeline.description and input.pipeline.tags) resolve
+# correctly when this file is evaluated against pipeline-guardrails.rego.
+pipeline:
+  description: >
+    Comprehensive stage gate definitions for build, test,
+    security-scan, staging, and production pipeline stages.
+  tags:
+    owner: platform-engineering
+    cost-centre: deloitte-cloud-services
+
+# ---------------------------------------------------------------------------
+# GLOBAL DEFAULTS
+# Applied to all gates unless overridden at the gate level.
+# ---------------------------------------------------------------------------
+defaults:
+  timeout: 30m
+  retryOnFailure: false
+  notifyOnFailure:
+    channels:
+      - type: slack
+        webhook: <+secrets.getValue("slack-webhook-pipeline-alerts")>
+      - type: email
+        recipients:
+          - pipeline-alerts@deloitte.com
+  failFast: true
+
+# ---------------------------------------------------------------------------
+# STAGE GATES
+# ---------------------------------------------------------------------------
+gates:
+
+  # -------------------------------------------------------------------------
+  # GATE: BUILD
+  # -------------------------------------------------------------------------
+  - id: gate-build
+    name: Build Gate
+    stage: build
+    description: >
+      Validates code compilation, dependency resolution, and
+      artifact generation before downstream stages execute.
+
+    timeout: 20m
+
+    entryCriteria:
+      - id: EC-BUILD-01
+        description: Source branch must be up to date with base branch
+        condition: "pipeline.gitBranch.behindCount == 0"
+        required: true
+      - id: EC-BUILD-02
+        description: No merge conflicts detected
+        condition: "pipeline.gitBranch.conflictCount == 0"
+        required: true
+      - id: EC-BUILD-03
+        description: Required pipeline tags (owner, cost-centre) must be present
+        condition: "pipeline.tags['owner'] != null && pipeline.tags['cost-centre'] != null"
+        required: true
+
+    exitCriteria:
+      - id: XC-BUILD-01
+        description: Build step must complete with exit code 0
+        condition: "stage.steps.build.exitCode == 0"
+        required: true
+      - id: XC-BUILD-02
+        description: Build artifact must be published to artifact registry
+        condition: "stage.outputs.artifactDigest != null"
+        required: true
+      - id: XC-BUILD-03
+        description: Build duration must not exceed timeout threshold
+        condition: "stage.duration <= gate.timeout"
+        required: true
+
+    automatedConditions:
+      passThreshold:
+        requiredChecks: ALL
+        minimumPassRate: 100
+      failConditions:
+        - condition: "stage.steps.build.exitCode != 0"
+          action: FAIL_GATE
+        - condition: "stage.outputs.artifactDigest == null"
+          action: FAIL_GATE
+
+    manualApproval:
+      required: false
+
+    notifications:
+      onFailure:
+        message: "🔴 BUILD GATE FAILED — Pipeline: <+pipeline.name> | Branch: <+pipeline.gitBranch>"
+        channels: [slack, email]
+      onSuccess:
+        message: "✅ BUILD GATE PASSED — Pipeline: <+pipeline.name>"
+        channels: [slack]
+
+  # -------------------------------------------------------------------------
+  # GATE: TEST
+  # -------------------------------------------------------------------------
+  - id: gate-test
+    name: Test Gate
+    stage: test
+    description: >
+      Validates unit, integration, and code-coverage thresholds
+      before the security scan stage executes.
+
+    timeout: 45m
+
+    entryCriteria:
+      - id: EC-TEST-01
+        description: Build gate must have passed
+        condition: "gates['gate-build'].status == 'PASSED'"
+        required: true
+      - id: EC-TEST-02
+        description: Build artifact digest must be available
+        condition: "pipeline.artifacts.primary.digest != null"
+        required: true
+
+    exitCriteria:
+      - id: XC-TEST-01
+        description: Unit test pass rate must be >= 95%
+        condition: "stage.testResults.unit.passRate >= 95"
+        required: true
+      - id: XC-TEST-02
+        description: Integration test pass rate must be >= 90%
+        condition: "stage.testResults.integration.passRate >= 90"
+        required: true
+      - id: XC-TEST-03
+        description: Code coverage must be >= 80%
+        condition: "stage.testResults.coverage.lineCoverage >= 80"
+        required: true
+      - id: XC-TEST-04
+        description: No critical test failures allowed
+        condition: "stage.testResults.critical.failCount == 0"
+        required: true
+
+    automatedConditions:
+      passThreshold:
+        requiredChecks: ALL
+        minimumPassRate: 100
+      failConditions:
+        - condition: "stage.testResults.unit.passRate < 95"
+          action: FAIL_GATE
+          severity: HIGH
+        - condition: "stage.testResults.coverage.lineCoverage < 80"
+          action: FAIL_GATE
+          severity: MEDIUM
+        - condition: "stage.testResults.critical.failCount > 0"
+          action: FAIL_GATE
+          severity: CRITICAL
+
+    manualApproval:
+      required: false
+
+    notifications:
+      onFailure:
+        message: >
+          🔴 TEST GATE FAILED — Pipeline: <+pipeline.name> |
+          Unit Pass Rate: <+stage.testResults.unit.passRate>% |
+          Coverage: <+stage.testResults.coverage.lineCoverage>%
+        channels: [slack, email]
+      onSuccess:
+        message: "✅ TEST GATE PASSED — Pipeline: <+pipeline.name>"
+        channels: [slack]
+
+  # -------------------------------------------------------------------------
+  # GATE: SECURITY SCAN
+  # -------------------------------------------------------------------------
+  - id: gate-security-scan
+    name: Security Scan Gate
+    stage: security-scan
+    description: >
+      Validates SAST, dependency vulnerability scanning, and
+      container image scanning results before staging deployment.
+
+    timeout: 30m
+
+    entryCriteria:
+      - id: EC-SEC-01
+        description: Test gate must have passed
+        condition: "gates['gate-test'].status == 'PASSED'"
+        required: true
+      - id: EC-SEC-02
+        description: Container image must be present in approved registry
+        condition: "pipeline.artifacts.primary.imagePath =~ '^(gcr.io/deloitte-|us-docker.pkg.dev/deloitte-)'"
+        required: true
+
+    exitCriteria:
+      - id: XC-SEC-01
+        description: No critical CVEs in SAST scan
+        condition: "stage.scanResults.sast.criticalCount == 0"
+        required: true
+      - id: XC-SEC-02
+        description: No critical CVEs in dependency scan
+        condition: "stage.scanResults.dependency.criticalCount == 0"
+        required: true
+      - id: XC-SEC-03
+        description: No critical CVEs in container image scan
+        condition: "stage.scanResults.container.criticalCount == 0"
+        required: true
+      - id: XC-SEC-04
+        description: High CVEs must not exceed threshold (max 5)
+        condition: "stage.scanResults.dependency.highCount <= 5"
+        required: true
+      - id: XC-SEC-05
+        description: No hardcoded secrets detected
+        condition: "stage.scanResults.secretScan.findingCount == 0"
+        required: true
+
+    automatedConditions:
+      passThreshold:
+        requiredChecks: ALL
+        minimumPassRate: 100
+      failConditions:
+        - condition: "stage.scanResults.sast.criticalCount > 0"
+          action: FAIL_GATE
+          severity: CRITICAL
+        - condition: "stage.scanResults.dependency.criticalCount > 0"
+          action: FAIL_GATE
+          severity: CRITICAL
+        - condition: "stage.scanResults.container.criticalCount > 0"
+          action: FAIL_GATE
+          severity: CRITICAL
+        - condition: "stage.scanResults.secretScan.findingCount > 0"
+          action: FAIL_GATE
+          severity: CRITICAL
+        - condition: "stage.scanResults.dependency.highCount > 5"
+          action: FAIL_GATE
+          severity: HIGH
+
+    manualApproval:
+      required: false
+
+    notifications:
+      onFailure:
+        message: >
+          🔴 SECURITY GATE FAILED — Pipeline: <+pipeline.name> |
+          Critical CVEs: <+stage.scanResults.dependency.criticalCount> |
+          Secret Findings: <+stage.scanResults.secretScan.findingCount>
+        channels: [slack, email]
+        escalate:
+          to:
+            - security-team@deloitte.com
+          after: 0m
+      onSuccess:
+        message: "✅ SECURITY GATE PASSED — Pipeline: <+pipeline.name>"
+        channels: [slack]
+
+  # -------------------------------------------------------------------------
+  # GATE: STAGING
+  # -------------------------------------------------------------------------
+  - id: gate-staging
+    name: Staging Gate
+    stage: staging
+    description: >
+      Validates deployment health, smoke tests, and readiness
+      checks in the staging environment before UAT and production.
+
+    timeout: 60m
+
+    entryCriteria:
+      - id: EC-STG-01
+        description: Security scan gate must have passed
+        condition: "gates['gate-security-scan'].status == 'PASSED'"
+        required: true
+      - id: EC-STG-02
+        description: Staging environment must be available and healthy
+        condition: "environments.staging.status == 'HEALTHY'"
+        required: true
+      - id: EC-STG-03
+        description: Deployment manifest must reference approved image digest
+        condition: "stage.spec.artifacts.primary.digest != null"
+        required: true
+
+    exitCriteria:
+      - id: XC-STG-01
+        description: Deployment rollout must reach 100% healthy pods/instances
+        condition: "stage.deployment.healthyPercent == 100"
+        required: true
+      - id: XC-STG-02
+        description: Smoke tests must pass (100% pass rate)
+        condition: "stage.testResults.smoke.passRate == 100"
+        required: true
+      - id: XC-STG-03
+        description: Service health check endpoint must return HTTP 200
+        condition: "stage.healthCheck.statusCode == 200"
+        required: true
+      - id: XC-STG-04
+        description: No critical errors in application logs post-deploy (5 min window)
+        condition: "stage.logs.criticalErrorCount == 0"
+        required: true
+
+    automatedConditions:
+      passThreshold:
+        requiredChecks: ALL
+        minimumPassRate: 100
+      failConditions:
+        - condition: "stage.deployment.healthyPercent < 100"
+          action: FAIL_GATE
+          rollback: true
+        - condition: "stage.testResults.smoke.passRate < 100"
+          action: FAIL_GATE
+          rollback: true
+        - condition: "stage.healthCheck.statusCode != 200"
+          action: FAIL_GATE
+          rollback: true
+
+    manualApproval:
+      required: true
+      approvalStep:
+        name: Staging Deployment Approval
+        type: HarnessApproval
+        approvers:
+          minimumCount: 1
+          userGroups:
+            - staging-approvers
+        message: >
+          Staging gate checks have passed. Please review the deployment
+          summary and approve to continue to UAT/Production pipeline stages.
+        timeout: 4h
+        # Aligned to match env-staging auto-approval conditions in approval-rules.yaml:
+        # scheduled + low risk-level + Saturday maintenance window only.
+        autoApproveCondition: >
+          pipeline.triggerType == 'SCHEDULED' &&
+          pipeline.tags['risk-level'] == 'low' &&
+          pipeline.executionTime.dayOfWeek == 'SATURDAY' &&
+          pipeline.executionTime.hourUTC >= 2 &&
+          pipeline.executionTime.hourUTC < 5
+
+    notifications:
+      onFailure:
+        message: >
+          🔴 STAGING GATE FAILED — Pipeline: <+pipeline.name> |
+          Healthy: <+stage.deployment.healthyPercent>% |
+          Smoke Tests: <+stage.testResults.smoke.passRate>%
+        channels: [slack, email]
+      onApprovalPending:
+        message: >
+          ⏳ STAGING GATE AWAITING APPROVAL — Pipeline: <+pipeline.name> |
+          Approvers: staging-approvers | Timeout: 4h
+        channels: [slack]
+      onSuccess:
+        message: "✅ STAGING GATE PASSED — Pipeline: <+pipeline.name>"
+        channels: [slack]
+
+  # -------------------------------------------------------------------------
+  # GATE: UAT
+  # -------------------------------------------------------------------------
+  - id: gate-uat
+    name: UAT Gate
+    stage: uat
+    description: >
+      Validates UAT sign-off from both the platform engineering team and
+      the business/QA team. Enforces dual-approver requirements matching
+      env-uat in approval-rules.yaml before production gate proceeds.
+
+    timeout: 24h
+
+    entryCriteria:
+      - id: EC-UAT-01
+        description: Staging gate must have passed and been approved
+        condition: "gates['gate-staging'].status == 'PASSED'"
+        required: true
+      - id: EC-UAT-02
+        description: UAT environment must be available and healthy
+        condition: "environments.uat.status == 'HEALTHY'"
+        required: true
+      - id: EC-UAT-03
+        description: Deployment artifact digest must match the staging-approved artifact
+        condition: "stage.spec.artifacts.primary.digest == gates['gate-staging'].outputs.artifactDigest"
+        required: true
+
+    exitCriteria:
+      - id: XC-UAT-01
+        description: All UAT acceptance test cases must pass (100% pass rate)
+        condition: "stage.testResults.uat.passRate == 100"
+        required: true
+      - id: XC-UAT-02
+        description: No critical or high defects open in UAT defect tracker
+        condition: "stage.defects.criticalCount == 0 && stage.defects.highCount == 0"
+        required: true
+      - id: XC-UAT-03
+        description: UAT sign-off document must be attached to the change ticket
+        condition: "pipeline.variables.uatSignOffAttached == 'true'"
+        required: true
+
+    automatedConditions:
+      passThreshold:
+        requiredChecks: ALL
+        minimumPassRate: 100
+      failConditions:
+        - condition: "stage.testResults.uat.passRate < 100"
+          action: FAIL_GATE
+          severity: HIGH
+        - condition: "stage.defects.criticalCount > 0"
+          action: FAIL_GATE
+          severity: CRITICAL
+        - condition: "stage.defects.highCount > 0"
+          action: FAIL_GATE
+          severity: HIGH
+
+    manualApproval:
+      required: true
+      approvalStep:
+        name: UAT Deployment Approval
+        type: HarnessApproval
+        approvers:
+          minimumCount: 2
+          userGroups:
+            - uat-platform-approvers
+            - uat-business-approvers
+          minimumPerGroup: 1
+        message: >
+          UAT gate checks have passed. Please review the UAT test results,
+          defect summary, and sign-off document before approving to
+          progress to the Production pipeline stage.
+        timeout: 24h
+
+    notifications:
+      onFailure:
+        message: >
+          🔴 UAT GATE FAILED — Pipeline: <+pipeline.name> |
+          UAT Pass Rate: <+stage.testResults.uat.passRate>% |
+          Critical Defects: <+stage.defects.criticalCount>
+        channels: [slack, email]
+      onApprovalPending:
+        message: >
+          ⏳ UAT GATE AWAITING APPROVAL — Pipeline: <+pipeline.name> |
+          Required Approvers: uat-platform-approvers (min 1), uat-business-approvers (min 1) |
+          Timeout: 24h
+        channels: [slack, email]
+      onSuccess:
+        message: "✅ UAT GATE PASSED — Pipeline: <+pipeline.name>"
+        channels: [slack]
+
+  # -------------------------------------------------------------------------
+  # GATE: PRODUCTION
+  # -------------------------------------------------------------------------
+  - id: gate-production
+    name: Production Gate
+    stage: production
+    description: >
+      Final gate before production deployment. Requires mandatory
+      manual approval, validates all upstream gates, enforces
+      change freeze windows, and requires rollback readiness.
+
+    timeout: 2h
+
+    entryCriteria:
+      - id: EC-PROD-01
+        description: UAT gate must have passed and been approved
+        condition: "gates['gate-uat'].status == 'PASSED'"
+        required: true
+      - id: EC-PROD-02
+        description: Production environment must not be in a change freeze window
+        condition: "environments.production.changeFreezeActive == false"
+        required: true
+      - id: EC-PROD-03
+        description: Rollback artifact from previous stable release must be available
+        condition: "environments.production.rollbackArtifact.digest != null"
+        required: true
+      - id: EC-PROD-04
+        description: Deployment window must be within allowed hours (07:00–21:00 UTC)
+        condition: "pipeline.executionTime.hourUTC >= 7 && pipeline.executionTime.hourUTC <= 21"
+        required: true
+      - id: EC-PROD-05
+        description: Change ticket (ServiceNow/Jira) must be in APPROVED state
+        condition: "pipeline.variables.changeTicketStatus == 'APPROVED'"
+        required: true
+
+    exitCriteria:
+      - id: XC-PROD-01
+        description: Production deployment must reach 100% healthy
+        condition: "stage.deployment.healthyPercent == 100"
+        required: true
+      - id: XC-PROD-02
+        description: Production smoke tests must pass (100%)
+        condition: "stage.testResults.smoke.passRate == 100"
+        required: true
+      - id: XC-PROD-03
+        description: Production health check must return HTTP 200
+        condition: "stage.healthCheck.statusCode == 200"
+        required: true
+      - id: XC-PROD-04
+        description: Error rate must not spike above 1% in 10 min post-deploy window
+        condition: "stage.metrics.errorRate <= 1.0"
+        required: true
+      - id: XC-PROD-05
+        description: P99 latency must not increase by more than 20% vs baseline
+        condition: "stage.metrics.latencyP99IncreasePercent <= 20"
+        required: true
+
+    automatedConditions:
+      passThreshold:
+        requiredChecks: ALL
+        minimumPassRate: 100
+      failConditions:
+        - condition: "stage.deployment.healthyPercent < 100"
+          action: FAIL_GATE
+          rollback: true
+          severity: CRITICAL
+        - condition: "stage.metrics.errorRate > 1.0"
+          action: FAIL_GATE
+          rollback: true
+          severity: CRITICAL
+        - condition: "stage.metrics.latencyP99IncreasePercent > 20"
+          action: FAIL_GATE
+          rollback: true
+          severity: HIGH
+
+    manualApproval:
+      required: true
+      approvalStep:
+        name: Production Deployment Approval
+        type: HarnessApproval
+        approvers:
+          minimumCount: 2
+          userGroups:
+            - production-approvers
+            - security-approvers
+        message: >
+          All pre-production gates have passed. This approval authorises
+          deployment to PRODUCTION. Verify the change ticket, release notes,
+          and rollback plan before approving.
+        timeout: 8h
+        escalation:
+          after: 4h
+          escalateTo:
+            - vp-engineering@deloitte.com
+
+    notifications:
+      onFailure:
+        message: >
+          🚨 PRODUCTION GATE FAILED — Pipeline: <+pipeline.name> |
+          Healthy: <+stage.deployment.healthyPercent>% |
+          Error Rate: <+stage.metrics.errorRate>%
+          Rollback initiated automatically.
+        channels: [slack, email]
+        escalate:
+          to:
+            - on-call-engineering@deloitte.com
+            - vp-engineering@deloitte.com
+          after: 0m
+      onApprovalPending:
+        message: >
+          ⏳ PRODUCTION GATE AWAITING APPROVAL — Pipeline: <+pipeline.name> |
+          Required Approvers: production-approvers, security-approvers |
+          Timeout: 8h
+        channels: [slack, email]
+      onSuccess:
+        message: "✅ PRODUCTION GATE PASSED — Deployment complete: <+pipeline.name>"
+        channels: [slack, email]
