@@ -1,6 +1,6 @@
 # OPA Policy Writing Guide
 
-> 🛡️ Comprehensive guide for writing, testing, and deploying OPA policies in the `agent_guardrails` repository
+> 🛡️ Comprehensive guide for writing, testing, and deploying OPA policies in this repository
 
 ---
 
@@ -79,7 +79,6 @@ allow if {
 ### Directory Layout
 
 ```
-agent_guardrails/
 ├── policies/
 │   ├── opa/
 │   │   ├── pipeline-guardrails.rego     ← harness.pipeline.guardrails

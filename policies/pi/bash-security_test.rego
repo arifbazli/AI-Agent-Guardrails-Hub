@@ -225,6 +225,19 @@ test_pi003_violation_pipe_to_unapproved_command {
     count([v | v := result[_]; v.rule == "PI-003"]) > 0
 }
 
+test_pi003_violation_bare_ampersand_backgrounding {
+    # A lone `&` (background execution) was missing from
+    # shell_metacharacter_patterns even though it's just as exploitable as `&&`.
+    result := bash.violation with input as {
+        "pi_agent": {
+            "bash_security_level": "L4",
+            "bash_commands": ["pytest & rm -rf /"],
+
+        },
+    }
+    count([v | v := result[_]; v.rule == "PI-003"]) > 0
+}
+
 test_pi003_violation_command_substitution {
     result := bash.violation with input as {
         "pi_agent": {

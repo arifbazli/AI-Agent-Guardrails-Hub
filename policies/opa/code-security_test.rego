@@ -74,6 +74,15 @@ test_cs002_pass_password_from_env_var {
     count([v | v := result[_]; v.rule == "CS-002"]) == 0
 }
 
+test_cs002_violation_unquoted_password {
+    # password_patterns previously required surrounding quotes, so an
+    # unquoted literal assignment bypassed detection entirely.
+    result := security.violation with input as {
+        "files": [{"path": "config.py", "content": "PASSWORD=mySuperSecret123"}],
+    }
+    count([v | v := result[_]; v.rule == "CS-002"]) > 0
+}
+
 # ---------------------------------------------------------------------------
 # CS-003 — No use of deprecated or insecure functions
 # ---------------------------------------------------------------------------
@@ -279,6 +288,15 @@ test_cs009_violation_todo_comment_in_source {
 test_cs009_violation_pdb_set_trace_in_python {
     result := security.violation with input as {
         "files": [{"path": "src/handler.py", "content": "# Copyright 2026 Deloitte\nimport pdb\npdb.set_trace()"}],
+    }
+    count([v | v := result[_]; v.rule == "CS-009"]) > 0
+}
+
+test_cs009_violation_fstring_debug_print {
+    # The debug pattern previously required the quote to immediately follow
+    # the parenthesis, so an f-string debug print (print(f"debug: ...")) bypassed it.
+    result := security.violation with input as {
+        "files": [{"path": "src/handler.py", "content": "# Copyright 2026 Deloitte\nprint(f\"debug: {value}\")"}],
     }
     count([v | v := result[_]; v.rule == "CS-009"]) > 0
 }

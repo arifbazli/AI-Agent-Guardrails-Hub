@@ -21,7 +21,7 @@ All inputs are read from environment variables set by the workflow:
 
   GITHUB_REPOSITORY   – "owner/repo"
   GITHUB_TOKEN        – standard Actions token (read issues, add labels/comments)
-  COPILOT_PAT         – PAT with repo scope used for Copilot assignment GraphQL call
+  COPILOT_PAT         – PAT with repo scope used to post the @copilot mention comment
   SCAN_CATEGORY       – preliminary category from bash classifier ("clean",
                         "api_unreachable", "session_cancelled", "unknown_anomaly",
                         or "" for the script to determine)
@@ -103,42 +103,24 @@ connection-test step with no retry needed.
 
 ### What happened
 The gap count emitted by the scan step (`{gaps_count}`) does not match the
-first "Gaps found:" occurrence found in the research issue body (`{body_count}`).
+first "Gaps found" occurrence found in the research issue body (`{body_count}`).
 
-### Root cause (confirmed)
-The issue body is built from `tail -60 policies/research/update-log.md`, which
-includes **all previous run entries** — including the initial-setup entry that
-always shows `Gaps found: 0`. The first regex match therefore finds 0 even when
-the actual scan found {gaps_count} gaps.
-
-There is also a secondary bug in the `RULE_COUNT` shell variable assignment in
-`research-agent.yml`: `grep -c` exits 1 on 0 matches (printing "0"), then
-`|| echo "0"` appends another "0", producing `RULE_COUNT="0\\n0"`.
-
-### Suggested fixes (apply to `.github/workflows/research-agent.yml`)
-1. **Fix RULE_COUNT double-output:**
-   Replace:
-   ```bash
-   RULE_COUNT=$(grep -cE "^(violation|warn|deny)\\[" \\
-     policies/opa/research-proposals.rego 2>/dev/null || echo "0")
-   ```
-   With:
-   ```bash
-   RULE_COUNT=0
-   if [ -f "policies/opa/research-proposals.rego" ]; then
-     n=$(grep -cE "^(violation|warn|deny)\\[" \\
-       policies/opa/research-proposals.rego 2>/dev/null) && RULE_COUNT=$n || true
-   fi
-   ```
-
-2. **Fix issue body to show only the current run entry** instead of the full log tail.
-   In `research_agent.py`, write the current-run summary to a separate temp file
-   (e.g. `policies/research/current-scan-summary.md`) and reference that in the
-   workflow's issue body construction instead of `tail -60 update-log.md`.
+### Investigation steps
+1. Open the issue body for #{issue_number} and confirm which heading the
+   mismatch regex matched — it should be the current run's
+   `### Gaps found (new this run): N` line from
+   `policies/research/current-scan-summary.md`, not a stale entry.
+2. Confirm `research-agent.yml`'s "Create research summary issue" step is
+   still reading `current-scan-summary.md` (current run only) rather than
+   falling back to a `tail` of the cumulative `update-log.md`.
+3. Check `gap_analysis()` / `update_log()` in `scripts/research_agent.py` for
+   any recent change to how `gaps`/`recurring`/`covered` counts are computed
+   or rendered — this category means the two numbers disagree even though
+   they should describe the same run.
 
 ### Fix criteria
-Re-run the workflow; confirm the research issue body's "Gaps found:" matches the
-`gaps_count` job-summary output, and "New rules proposed:" contains a single integer.
+Re-run the workflow; confirm the research issue body's "Gaps found" line
+matches the `gaps_count` job-summary output.
 """,
 
     "session_cancelled": """\
@@ -179,8 +161,9 @@ have exited non-zero, or the update log may not have been written.
 ### Investigation steps
 1. Open the run linked above and expand each step's logs.
 2. Look for Python tracebacks in the **"Run research scan"** step.
-3. Verify `scripts/research_agent.py` writes both output keys to `GITHUB_OUTPUT`:
+3. Verify `scripts/research_agent.py` writes all three output keys to `GITHUB_OUTPUT`:
    - `gaps_count=<integer>`
+   - `recurring_count=<integer>`
    - `covered_count=<integer>`
 4. Confirm `policies/research/update-log.md` was updated (check branch diff).
 5. Ensure `policies/research/` directory exists in the repository.
@@ -238,7 +221,7 @@ def add_label(owner: str, repo: str, number: int, label: str, token: str) -> Non
             payload={"labels": [label]},
             token=token,
         )
-    except RuntimeError as exc:
+    except (RuntimeError, OSError, urllib.error.URLError) as exc:
         print(f"WARNING: could not add label '{label}': {exc}", file=sys.stderr)
 
 
@@ -265,16 +248,23 @@ def ensure_label(
     except RuntimeError as exc:
         if "422" not in str(exc):
             print(f"WARNING: could not create label '{name}': {exc}", file=sys.stderr)
+    except (OSError, urllib.error.URLError) as exc:
+        print(f"WARNING: could not create label '{name}': {exc}", file=sys.stderr)
 
 
 def list_recent_scan_issues(
     owner: str, repo: str, category_label: str, token: str, per_page: int = 5
 ) -> list[dict]:
-    """Return the most recently created scan issues carrying category_label."""
+    """Return still-open scan issues carrying category_label.
+
+    Scoped to state=open (not all-time) so a category that was resolved and
+    closed months ago doesn't count toward the *next*, unrelated escalation
+    streak — "consecutive failures" should mean consecutive *unresolved* ones.
+    """
     path = (
         f"/repos/{owner}/{repo}/issues"
         f"?labels={urllib.parse.quote(category_label)}"
-        f"&state=all&per_page={per_page}&sort=created&direction=desc"
+        f"&state=open&per_page={per_page}&sort=created&direction=desc"
     )
     result = _api(path, token=token)
     return result if isinstance(result, list) else []
@@ -327,18 +317,22 @@ def create_failure_issue(
 
 def detect_stats_mismatch(issue_body: str, gaps_count: str) -> tuple[bool, int | None]:
     """
-    Parse the first '### Gaps found: N' from the issue body and compare with
-    the workflow's gaps_count output.
+    Parse the first '### Gaps found ...: N' heading from the issue body and
+    compare with the workflow's gaps_count output.
 
-    The issue body is built from ``tail -60 update-log.md``, which includes the
-    initial-setup entry (always Gaps found: 0) before the current scan entry.
-    Using the first match therefore exposes the mismatch when the two values differ.
+    The issue body is built from current-scan-summary.md (current run only)
+    when present, falling back to a tail of update-log.md otherwise — see
+    research-agent.yml. A mismatch here means the two counts disagree even
+    within what should be the same run's data.
 
     Returns (is_mismatch, body_count_or_None).
     """
     if not issue_body or not gaps_count:
         return False, None
-    m = re.search(r"###\s+Gaps found:\s*(\d+)", issue_body)
+    # research_agent.py's heading is "### Gaps found (new this run): N" —
+    # [^:]* tolerates that parenthetical (or its absence in older log data)
+    # without requiring an exact literal match.
+    m = re.search(r"###\s+Gaps found[^:]*:\s*(\d+)", issue_body)
     if not m:
         return False, None
     body_count = int(m.group(1))

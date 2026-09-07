@@ -247,7 +247,7 @@ relevant developers.
   Enforcement Agent's responsibility.
 - Does **not** respond to developer questions — all developer Q&A is handled 
   by the Benchmark Agent.
-- Does **not** access systems outside `agent_guardrails` repo and the 
+- Does **not** access systems outside this repository and the 
   approved scan sources listed in the input contract.
 
 ---
@@ -285,7 +285,7 @@ Field requirements by trigger:
 
 ```json
 {
-  "status": "UPDATED | NO_CHANGES | ERROR",
+  "status": "UPDATED | NO_CHANGES | WARNING | ERROR",
   "gaps_found": "<integer>",
   "rules_drafted": "<integer>",
   "rules_updated": "<integer>",

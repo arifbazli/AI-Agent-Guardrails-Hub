@@ -30,14 +30,14 @@ compliance checks throughout the Harness software delivery pipeline.
 
 ## 🛡️ Guardrail Enforcement Agent
 - **Role:** OPA policy enforcement and compliance evaluation engine
-- **Location:** `agent_guardrails/.github/agents/guardrail-agent.md`
+- **Location:** `.github/agents/guardrail-agent.md`
 - **Triggers:** PR opened, pipeline stage execution, policy file change detected
 - **Handoff:** Returns structured violation report to Benchmark Agent
 - **Returns:** Pass/fail status with violation details and remediation steps
 
 ## 🔬 Research Agent
 - **Role:** Automated threat intelligence monitor and policy gap analyser
-- **Location:** `agent_guardrails/.github/agents/research-agent.md`
+- **Location:** `.github/agents/research-agent.md`
 - **Triggers:** Weekly schedule, on-demand, or when a PR touches policy files
 - **Handoff:** Returns structured gap report and PR URL to Benchmark Agent
 - **Returns:** Gap list with severities, drafted rule proposals, and update-log reference

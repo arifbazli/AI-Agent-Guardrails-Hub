@@ -5,7 +5,7 @@ description: OPA Policy Enforcement Agent for Harness Guardrail Evaluation
 
 # Guardrail Enforcement Agent
 
-This agent is scoped to the `agent_guardrails` repository and is the policy 
+This agent is scoped to this repository and is the policy 
 enforcement engine for the multi-agent hub. It evaluates PRs, pipeline changes, 
 and code submissions against OPA-based guardrail policies — returning structured 
 compliance reports to the Benchmark Agent for action.
@@ -32,19 +32,19 @@ compliance reports to the Benchmark Agent for action.
 All OPA policies are stored and versioned in this repository:
 
 ```
-agent_guardrails/
-├── policies/
-│   ├── opa/
-│   │   ├── pipeline-guardrails.rego     ← Pipeline stage policies
-│   │   ├── code-security.rego           ← Code security rules
-│   │   ├── connector-compliance.rego    ← Harness connector policies
-│   │   └── delegate-validation.rego     ← Delegate config checks
-│   └── pipeline/
-│       ├── stage-gates.yaml             ← Pipeline gate definitions
-│       └── approval-rules.yaml          ← Approval workflow rules
-└── docs/
-    ├── policy-guide.md                  ← How to write OPA policies
-    └── violation-remediation.md         ← Fix guide for common violations
+policies/
+├── opa/
+│   ├── pipeline-guardrails.rego     ← Pipeline stage policies
+│   ├── code-security.rego           ← Code security rules
+│   ├── connector-compliance.rego    ← Harness connector policies
+│   └── delegate-validation.rego     ← Delegate config checks
+└── pipeline/
+    ├── stage-gates.yaml             ← Pipeline gate definitions
+    └── approval-rules.yaml          ← Approval workflow rules
+
+docs/
+├── policy-guide.md                  ← How to write OPA policies
+└── violation-remediation.md         ← Fix guide for common violations
 ```
 
 ---
@@ -95,7 +95,7 @@ agent_guardrails/
 | Condition | Status Returned | Action |
 |---|---|---|
 | OPA evaluation engine fails | `ERROR` | Describe the failure in the report. Do **not** block the pipeline. |
-| Policy file is malformed (invalid Rego) | `CRITICAL ERROR` | Block the pipeline. Flag immediately to Benchmark Agent with file name and line number. |
+| Policy file is malformed (invalid Rego) | `ERROR` | Block the pipeline. Flag immediately to Benchmark Agent with file name and line number. |
 | Input payload is missing required fields | `WARNING` | List every missing field. Request the Benchmark Agent resubmit with complete data. |
 | Evaluation is inconclusive (no definitive pass or fail) | `WARNING` | Flag for manual review. Do not block the pipeline automatically. |
 
@@ -125,11 +125,11 @@ All anchors below are relative to that file:
   committed by developers following `docs/policy-guide.md`.
 - Does **not** approve or merge PRs directly — it only returns a compliance
   report to the Benchmark Agent.
-- Does **not** access systems or repositories outside `agent_guardrails`.
+- Does **not** access systems or repositories outside this one.
 
 ---
 
-> **Note:** This agent operates within the `agent_guardrails` repo only. 
+> **Note:** This agent operates within this repository only. 
 > Policy changes committed here automatically propagate to all connected 
 > Harness pipelines via the Benchmark Agent hub. Always test new OPA policies 
 > in a non-production pipeline before merging to the default branch.

@@ -57,9 +57,26 @@ is_production_stage(stage) if {
     regex.match("^(prod|production|prd).*", env_name)
 }
 
+approval_step_types := {"HarnessApproval", "JiraApproval", "ServiceNowApproval"}
+
+# Membership alone isn't enough — an approval step placed AFTER the deploy
+# step previously still counted as compliant. Require the earliest approval
+# step to come before every other (non-approval) step in the stage.
 has_approval_step(stage) if {
-    step := stage.spec.execution.steps[_]
-    step.step.type in {"HarnessApproval", "JiraApproval", "ServiceNowApproval"}
+    steps := stage.spec.execution.steps
+    approval_indices := [i | steps[i].step.type in approval_step_types]
+    count(approval_indices) > 0
+    other_indices := [i | steps[i]; not steps[i].step.type in approval_step_types]
+    count(other_indices) == 0
+}
+
+has_approval_step(stage) if {
+    steps := stage.spec.execution.steps
+    approval_indices := [i | steps[i].step.type in approval_step_types]
+    other_indices := [i | steps[i]; not steps[i].step.type in approval_step_types]
+    count(approval_indices) > 0
+    count(other_indices) > 0
+    min(approval_indices) < min(other_indices)
 }
 
 # ---------------------------------------------------------------------------

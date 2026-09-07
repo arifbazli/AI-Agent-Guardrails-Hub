@@ -1,6 +1,6 @@
 # Violation Remediation Guide
 
-> 🛡️ Step-by-step fix instructions for every active OPA policy rule in the `agent_guardrails` repository
+> 🛡️ Step-by-step fix instructions for every active OPA policy rule in this repository
 
 This guide covers all **44 active rules** across seven policy files. For each rule you will find:
 

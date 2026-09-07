@@ -485,7 +485,7 @@ gates:
         required: true
       - id: EC-PROD-04
         description: Deployment window must be within allowed hours (07:00–21:00 UTC) on Monday–Friday
-        condition: "pipeline.executionTime.hourUTC >= 7 && pipeline.executionTime.hourUTC <= 21 && pipeline.executionTime.dayOfWeek in ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY']"
+        condition: "pipeline.executionTime.hourUTC >= 7 && pipeline.executionTime.hourUTC < 21 && pipeline.executionTime.dayOfWeek in ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY']"
         required: true
       - id: EC-PROD-05
         description: Change ticket (ServiceNow/Jira) must be in APPROVED state

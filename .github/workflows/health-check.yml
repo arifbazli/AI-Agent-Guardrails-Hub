@@ -18,6 +18,12 @@ permissions:
   contents: read
   issues: write
 
+# Prevent an overlapping manual dispatch (e.g. to test force_failure) from
+# racing the 12-hourly scheduled run and creating duplicate failure issues.
+concurrency:
+  group: health-check
+  cancel-in-progress: false
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   OPA_VERSION: "v0.68.0"
@@ -70,6 +76,7 @@ jobs:
       - name: Check agents
         run: |
           echo "## 🤖 Agent Health" >> $GITHUB_STEP_SUMMARY
+          MISSING_AGENTS=0
           for agent in \
             Benchmark-agent.md \
             guardrail-agent.md \
@@ -79,8 +86,12 @@ jobs:
               echo "✅ $agent" >> $GITHUB_STEP_SUMMARY
             else
               echo "❌ $agent MISSING" >> $GITHUB_STEP_SUMMARY
+              MISSING_AGENTS=$((MISSING_AGENTS + 1))
             fi
           done
+          if [ $MISSING_AGENTS -gt 0 ]; then
+            echo "HEALTH_STATUS=FAIL" >> $GITHUB_ENV
+          fi
 
       - name: Check policy files
         run: |
@@ -148,11 +159,6 @@ jobs:
           if [ -z "$REASON" ]; then
             REASON="Automated health check failure"
           fi
-
-          gh label create "health-check-failure" \
-            --color "b60205" \
-            --description "Health check failed" \
-            --force 2>/dev/null || true
 
           ISSUE_URL=$(gh issue create \
             --title "🚨 Health Check Failed — $(date '+%Y-%m-%d %H:%M UTC')" \

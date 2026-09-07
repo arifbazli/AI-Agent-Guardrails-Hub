@@ -55,13 +55,15 @@ blocked_bash_patterns := [
 ]
 
 # Shell metacharacters that enable command chaining, substitution, or
-# redirection (e.g. "echo ok && rm -rf /"). command_is_approved below matches
-# on a prefix (startswith), so it cannot see past one of these — any command
-# containing one is blocked unconditionally, regardless of whitelist status.
+# redirection (e.g. "echo ok && rm -rf /", "pytest & rm -rf /"). Bare `&`
+# and `|` are used (not just `&&`/`||`) since they also match as substrings
+# of the two-character forms — a single `&` alone (backgrounding) is just as
+# exploitable as `&&`. command_is_approved below matches on a prefix
+# (startswith), so it cannot see past one of these — any command containing
+# one is blocked unconditionally, regardless of whitelist status.
 shell_metacharacter_patterns := [
     `;`,
-    `&&`,
-    `\|\|`,
+    `&`,
     `\|`,
     "`",
     `\$\(`,

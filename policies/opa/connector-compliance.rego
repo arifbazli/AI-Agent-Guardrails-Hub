@@ -115,6 +115,29 @@ is_expired(expiry_date) if {
     expiry_ns  < now_ns
 }
 
+# time.parse_rfc3339_ns errors on a malformed timestamp, which makes the
+# rule above undefined for that connector rather than flagging it — an
+# unparsable expiry_date must not silently bypass the expired-credential
+# check.
+violation contains msg if {
+    connector := input.connectors[_]
+    expiry := connector.spec.credentials.expiry_date
+    is_string(expiry)
+    not is_valid_rfc3339(expiry)
+    msg := {
+        "rule":       "CC-002",
+        "severity":   "CRITICAL",
+        "connector":  connector_id(connector),
+        "expiry":     expiry,
+        "issue":      sprintf("Connector '%v' has an unparsable credential expiry_date ('%v') — expiration cannot be verified.", [connector_id(connector), expiry]),
+        "fix":        "Set expiry_date to a valid RFC3339 timestamp (e.g. 2027-01-01T00:00:00Z), or remove the field if the credential does not expire.",
+    }
+}
+
+is_valid_rfc3339(s) if {
+    time.parse_rfc3339_ns(s)
+}
+
 # ---------------------------------------------------------------------------
 # RULE: CC-003 — Connectors must use approved authentication types
 # Severity: HIGH

@@ -1,4 +1,4 @@
-# Maintenance Runbook — agent_guardrails
+# Maintenance Runbook — AI Agent Guardrails Hub
 
 > Operational guide for keeping the self-healing guardrail system healthy.
 > Last verified: 2026-06-16

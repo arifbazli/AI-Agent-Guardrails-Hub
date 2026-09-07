@@ -1221,12 +1221,14 @@ env_name_is_sensitive(name) if {
 
 violation contains msg if {
     # Rule: RRP-029
-    stage   := input.pipeline.stages[_]
-    step    := stage.spec.execution.steps[_]
-    env_key := step.step.spec.envVariables[_]
+    stage    := input.pipeline.stages[_]
+    step     := stage.spec.execution.steps[_]
+    env_vars := step.step.spec.envVariables
+    some env_key
+    env_val  := env_vars[env_key]
     env_name_is_sensitive(env_key)
-    not step.step.spec.envVariables[env_key] == null
-    not startswith(step.step.spec.envVariables[env_key], "<+secrets")
+    env_val != null
+    not startswith(env_val, "<+secrets")
     msg := {
         "rule":    "RRP-029",
         "cve":     "CVE-2026-45582",

@@ -9,9 +9,12 @@ on:
   workflow_dispatch:
     inputs:
       trigger_type:
-        description: 'on_demand'
+        description: 'Label recorded for this manual run in the scan log'
         required: false
         default: 'on_demand'
+        type: choice
+        options:
+          - 'on_demand'
 
 permissions:
   contents: write
@@ -74,11 +77,13 @@ jobs:
 
       - name: Determine trigger type
         id: trigger
+        env:
+          TRIGGER_TYPE_INPUT: ${{ github.event.inputs.trigger_type }}
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
             echo "trigger=scheduled" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "trigger=${{ github.event.inputs.trigger_type || 'on_demand' }}" >> "$GITHUB_OUTPUT"
+            echo "trigger=${TRIGGER_TYPE_INPUT:-on_demand}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up Python
@@ -159,9 +164,19 @@ jobs:
       - name: Validate OPA policy syntax
         run: |
           echo "Validating all .rego files..."
-          find policies/ -name "*.rego" ! -name "*_test.rego" | while read f; do
-            opa check "$f" && echo "OK: $f" || echo "FAIL: $f"
+          FAILED=0
+          for f in $(find policies/ -name "*.rego" ! -name "*_test.rego"); do
+            if opa check "$f"; then
+              echo "OK: $f"
+            else
+              echo "FAIL: $f"
+              FAILED=$((FAILED + 1))
+            fi
           done
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::$FAILED policy file(s) failed opa check"
+            exit 1
+          fi
 
       # Always commit the log directly to the default branch. There is no
       # rule-drafting in this implementation (see research-agent.md's

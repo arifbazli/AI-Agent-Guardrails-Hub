@@ -118,6 +118,18 @@ test_cc002_pass_future_expiry_date {
     count([v | v := result[_]; v.rule == "CC-002"]) == 0
 }
 
+test_cc002_violation_malformed_expiry_date {
+    # time.parse_rfc3339_ns errors on malformed input, which previously made
+    # the is_expired() rule undefined and silently skipped the check.
+    result := compliance.violation with input as {
+        "connectors": [{
+            "identifier": "legacy-prod-connector",
+            "spec": {"credentials": {"expiry_date": "not-a-date"}},
+        }],
+    }
+    count([v | v := result[_]; v.rule == "CC-002"]) > 0
+}
+
 test_cc002_pass_no_expiry_date_field {
     result := compliance.violation with input as {
         "connectors": [{

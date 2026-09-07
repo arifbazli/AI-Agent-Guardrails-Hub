@@ -57,10 +57,10 @@ violation contains msg if {
 # ---------------------------------------------------------------------------
 
 password_patterns := [
-    `(?i)(password|passwd|pwd)\s*[:=]\s*["'][^"']{4,}["']`,
-    `(?i)(db[_-]?pass|database[_-]?password)\s*[:=]\s*["'][^"']{4,}["']`,
-    `(?i)(secret[_-]?key|client[_-]?secret)\s*[:=]\s*["'][^"']{8,}["']`,
-    `(?i)(private[_-]?key)\s*[:=]\s*["']-----BEGIN`,
+    `(?i)(password|passwd|pwd)\s*[:=]\s*["']?[A-Za-z0-9_\-+/]{4,}["']?`,
+    `(?i)(db[_-]?pass|database[_-]?password)\s*[:=]\s*["']?[A-Za-z0-9_\-+/]{4,}["']?`,
+    `(?i)(secret[_-]?key|client[_-]?secret)\s*[:=]\s*["']?[A-Za-z0-9_\-+/]{8,}["']?`,
+    `(?i)(private[_-]?key)\s*[:=]\s*["']?-----BEGIN`,
 ]
 
 violation contains msg if {
@@ -259,7 +259,7 @@ is_source_file(path) if {
 
 debug_patterns := [
     `(?i)\bconsole\.log\s*\(`,
-    `(?i)\bprint\s*\(\s*["']debug`,
+    `(?i)\bprint\s*\(\s*f?["']debug`,
     `(?i)\bdebugger\b`,
     `(?i)#\s*TODO\b`,
     `(?i)#\s*FIXME\b`,

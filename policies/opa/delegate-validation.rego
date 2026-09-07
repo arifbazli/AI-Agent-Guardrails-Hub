@@ -138,6 +138,19 @@ violation contains msg if {
 
 violation contains msg if {
     delegate := input.delegates[_]
+    object.get(delegate, "security_context", "MISSING") == "MISSING"
+    object.get(object.get(delegate, "spec", {}), "runAsRoot", "MISSING") == "MISSING"
+    msg := {
+        "rule":     "DV-004",
+        "severity": "HIGH",
+        "delegate": delegate.name,
+        "issue":    sprintf("Delegate '%v' declares neither security_context nor spec.runAsRoot, so root/non-root status cannot be verified.", [delegate.name]),
+        "fix":      "Explicitly set security_context.run_as_user (non-zero) or spec.runAsRoot: false so root-user compliance can be verified.",
+    }
+}
+
+violation contains msg if {
+    delegate := input.delegates[_]
     delegate.security_context.privileged == true
     msg := {
         "rule":     "DV-004",

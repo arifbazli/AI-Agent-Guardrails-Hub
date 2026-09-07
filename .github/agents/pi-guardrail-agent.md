@@ -30,7 +30,7 @@ The Pi Guardrail Agent is a specialised enforcement agent scoped to Pi coding ag
 ## Connected To
 
 - **Benchmark Agent hub** — receives trigger payloads; returns structured violation reports
-- **Scope:** `agent_guardrails` repo + Pi agent workflows
+- **Scope:** this repository + Pi agent workflows
 
 ---
 

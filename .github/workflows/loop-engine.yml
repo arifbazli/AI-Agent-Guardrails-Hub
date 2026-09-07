@@ -432,7 +432,11 @@ jobs:
     name: Loop Engine Summary
     runs-on: ubuntu-latest
     needs: [harness-loop, pi-loop, research-loop]
-    if: always()
+    if: |
+      always() &&
+      github.actor != 'github-actions[bot]' &&
+      github.actor != 'copilot-swe-agent[bot]' &&
+      github.actor != 'dependabot[bot]'
 
     steps:
       - name: Ensure required labels exist

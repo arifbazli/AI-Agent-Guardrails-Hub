@@ -254,6 +254,26 @@ test_dv004_violation_privileged_mode_enabled {
     count([v | v := result[_]; v.rule == "DV-004"]) > 0
 }
 
+test_dv004_violation_security_context_entirely_missing {
+    # delegate.security_context.run_as_user == 0 previously went undefined
+    # (no violation) when security_context was absent entirely and
+    # spec.runAsRoot was also unset — root status was unverifiable but
+    # silently treated as compliant.
+    result := validation.violation with input as {
+        "delegates": [{
+            "name": "prod-eu-west-delegate-01",
+            "status": "ENABLED",
+            "connected": true,
+            "version": "24.01.81202",
+            "tags": ["org-approved", "owner:platform-team", "cost-centre:CC-001"],
+            "resources": {"limits": {"cpu": "1", "memory": "2Gi"}},
+            "scope": {"type": "ORG"},
+        }],
+        "policy": {"approved_delegate_versions": ["24.01.81202"]},
+    }
+    count([v | v := result[_]; v.rule == "DV-004"]) > 0
+}
+
 test_dv004_pass_non_root_non_privileged_delegate {
     result := validation.violation with input as {
         "delegates": [{

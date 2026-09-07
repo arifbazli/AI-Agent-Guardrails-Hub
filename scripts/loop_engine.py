@@ -17,7 +17,7 @@ python scripts/loop_engine.py \
 Environment variables (GitHub Actions context)
 ----------------------------------------------
 GITHUB_TOKEN          – required for GitHub Issue / PR comment creation
-GITHUB_REPOSITORY     – owner/repo  e.g. Deloitte-Global-Cloud-Services/agent_guardrails
+GITHUB_REPOSITORY     – owner/repo  e.g. arifbazli/AI-Agent-Guardrails-Hub
 GITHUB_REF_NAME       – current branch name
 PR_NUMBER             – open PR number (optional; used for PR comment)
 """
@@ -922,7 +922,10 @@ class ResearchAutoFixer:
             for rego in d.glob("*.rego"):
                 if rego.name.endswith("_test.rego"):
                     continue
-                for m in re.finditer(r'#\s*Rule:\s*[A-Z]+-(\d+)', rego.read_text()):
+                # Real rule headers use "# RULE:" (all caps) — see e.g.
+                # pipeline-guardrails.rego — not the mixed-case "# Rule:"
+                # this previously matched, which found zero real rule IDs.
+                for m in re.finditer(r'#\s*RULE:\s*[A-Z]+-(\d+)', rego.read_text(), re.IGNORECASE):
                     all_ids.append(int(m.group(1)))
         next_num = (max(all_ids) + 1) if all_ids else 1
 
@@ -932,10 +935,11 @@ class ResearchAutoFixer:
         text = path.read_text()
         # Replace the first duplicate occurrence
         new_text = re.sub(
-            r'(# Rule:\s*[A-Z]+-)(\d+)',
+            r'(#\s*RULE:\s*[A-Z]+-)(\d+)',
             lambda m, nn=next_num: f"{m.group(1)}{nn:03d}",
             text,
             count=1,
+            flags=re.IGNORECASE,
         )
         path.write_text(new_text)
 
@@ -974,7 +978,7 @@ class LoopNotifier:
 
             ## Manual Action Required
 
-            The loop engine could not auto-fix this violation after 3 attempts.
+            The loop engine could not auto-fix this violation after {self.max_attempts} attempt(s).
             Please review and fix manually.
 
             ## Violation Details
@@ -990,7 +994,7 @@ class LoopNotifier:
             print("[LoopNotifier] GITHUB_TOKEN or GITHUB_REPOSITORY not set — skipping issue creation", file=sys.stderr)
             return ""
         payload = json.dumps({
-            "title": f"Loop Engine: Auto-fix failed after 3 attempts — {self.pipeline} {self.rule_id}",
+            "title": f"Loop Engine: Auto-fix failed after {self.max_attempts} attempt(s) — {self.pipeline} {self.rule_id}",
             "body":  body,
             "labels": ["loop-engine-escalation", "needs-human-review"],
         }).encode()
@@ -1181,45 +1185,66 @@ class LoopEngine:
                     result=LoopResult.FAIL,
                 )
             print("[LoopEngine] LOW-severity violations only — advising, no auto-fix loop")
-        else:
-            for attempt in range(1, max_attempts + 1):
-                if attempt > 1:
-                    result = evaluator.evaluate()
-                    if result.passed:
-                        LoopLogger.log(
-                            pipeline=self.pipeline_type,
-                            rule_id=self.context.get("rule_id", "UNKNOWN"),
-                            attempt=attempt,
-                            violation="",
-                            fix_applied="none",
-                            result=LoopResult.PASS,
-                        )
-                        print(f"[LoopEngine] PASS on attempt {attempt}")
-                        return LoopResult.PASS
+            # Advisory-only: never auto-fixed, so there is nothing to escalate
+            # to a human either — escalating here would be a fresh GitHub
+            # Issue/PR comment for something the loop was never asked to fix.
+            return LoopResult.FAIL
 
-                fix_description = fixer.generate_fix(result.violations)
-                fixer.apply_fix(result.violations)
+        for attempt in range(1, max_attempts + 1):
+            if attempt > 1:
+                result = evaluator.evaluate()
+                if result.passed:
+                    LoopLogger.log(
+                        pipeline=self.pipeline_type,
+                        rule_id=self.context.get("rule_id", "UNKNOWN"),
+                        attempt=attempt,
+                        violation="",
+                        fix_applied="none",
+                        result=LoopResult.PASS,
+                    )
+                    print(f"[LoopEngine] PASS on attempt {attempt}")
+                    return LoopResult.PASS
 
-                record = FixRecord(
+            fix_description = fixer.generate_fix(result.violations)
+            fixer.apply_fix(result.violations)
+
+            record = FixRecord(
+                attempt=attempt,
+                violations=result.violations,
+                fix_applied=fix_description,
+                result=LoopResult.FAIL,
+            )
+            self.loop_history.append(record)
+
+            for v in result.violations:
+                LoopLogger.log(
+                    pipeline=self.pipeline_type,
+                    rule_id=v.rule_id,
                     attempt=attempt,
-                    violations=result.violations,
+                    violation=v.description,
                     fix_applied=fix_description,
                     result=LoopResult.FAIL,
                 )
-                self.loop_history.append(record)
+            print(f"[LoopEngine] Attempt {attempt} FAIL — fix applied: {fix_description}")
 
-                for v in result.violations:
-                    LoopLogger.log(
-                        pipeline=self.pipeline_type,
-                        rule_id=v.rule_id,
-                        attempt=attempt,
-                        violation=v.description,
-                        fix_applied=fix_description,
-                        result=LoopResult.FAIL,
-                    )
-                print(f"[LoopEngine] Attempt {attempt} FAIL — fix applied: {fix_description}")
+        # The fix applied on the FINAL attempt above was never checked by the
+        # loop (only attempts 2..max_attempts re-evaluate the PRIOR attempt's
+        # fix) — without this, a MEDIUM-severity violation (budget=1) would
+        # escalate unconditionally even when its one fix attempt worked.
+        final_result = evaluator.evaluate()
+        if final_result.passed:
+            LoopLogger.log(
+                pipeline=self.pipeline_type,
+                rule_id=self.context.get("rule_id", "UNKNOWN"),
+                attempt=max_attempts,
+                violation="",
+                fix_applied="none",
+                result=LoopResult.PASS,
+            )
+            print(f"[LoopEngine] PASS after final fix attempt {max_attempts}")
+            return LoopResult.PASS
 
-        # Attempt budget exhausted (or advisory-only LOW violations) — escalate
+        # Attempt budget exhausted — escalate
         notifier.max_attempts = max_attempts
         notifier.escalate_to_human(self.loop_history)
         LoopLogger.log(

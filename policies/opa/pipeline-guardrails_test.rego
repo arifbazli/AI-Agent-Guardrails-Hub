@@ -92,6 +92,31 @@ test_pg001_pass_production_stage_with_harness_approval {
     count([v | v := result[_]; v.rule == "PG-001"]) == 0
 }
 
+test_pg001_violation_approval_step_after_deploy_step {
+    # has_approval_step previously only checked membership, not ordering — an
+    # approval step placed AFTER the deploy step still counted as compliant.
+    result := guardrails.violation with input as {
+        "pipeline": {"stages": [{
+            "name": "deploy-prod",
+            "type": "Deployment",
+            "spec": {
+                "infrastructure": {
+                    "environment": {"type": "Production"},
+                    "spec": {"delegateSelectors": ["prod-delegate"]},
+                },
+                "execution": {
+                    "steps": [
+                        {"step": {"name": "deploy", "type": "K8sRollingDeploy", "spec": {}}},
+                        {"step": {"name": "approve", "type": "HarnessApproval", "spec": {}}},
+                    ],
+                    "rollbackSteps": [{"step": {"name": "rollback", "type": "K8sRollingRollback", "spec": {}}}],
+                },
+            },
+        }]},
+    }
+    count([v | v := result[_]; v.rule == "PG-001"]) > 0
+}
+
 test_pg001_pass_non_production_stage_no_approval_needed {
     result := guardrails.violation with input as {
         "pipeline": {"stages": [{
