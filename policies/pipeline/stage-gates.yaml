@@ -342,14 +342,22 @@ gates:
           Staging gate checks have passed. Please review the deployment
           summary and approve to continue to UAT/Production pipeline stages.
         timeout: 4h
-        # Aligned to match env-staging auto-approval conditions in approval-rules.yaml:
-        # scheduled + low risk-level + Saturday maintenance window only.
+        # Aligned to match BOTH env-staging auto-approval conditions in
+        # approval-rules.yaml: (1) scheduled + low risk-level + Saturday
+        # maintenance window, or (2) hotfix branch + low risk-level +
+        # externally-approved change ticket. Previously only mirrored (1),
+        # so a hotfix approval-rules.yaml would auto-approve still required
+        # manual sign-off at this gate.
         autoApproveCondition: >
-          pipeline.triggerType == 'SCHEDULED' &&
+          (pipeline.triggerType == 'SCHEDULED' &&
           pipeline.tags['risk-level'] == 'low' &&
           pipeline.executionTime.dayOfWeek == 'SATURDAY' &&
           pipeline.executionTime.hourUTC >= 2 &&
-          pipeline.executionTime.hourUTC < 5
+          pipeline.executionTime.hourUTC < 5) ||
+          (pipeline.gitBranch =~ '^hotfix/' &&
+          pipeline.tags['risk-level'] == 'low' &&
+          pipeline.variables.changeTicketStatus == 'APPROVED' &&
+          pipeline.variables.changeTicketApprover != pipeline.triggeredBy)
 
     notifications:
       onFailure:

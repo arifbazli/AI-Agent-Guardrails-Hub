@@ -91,6 +91,15 @@ jobs:
         with:
           python-version: '3.12'
 
+      # pyyaml is optional at runtime (_load_threat_feed_config() falls back
+      # to hardcoded defaults if it can't be imported) but installing it
+      # lets threat-feed.yaml's enabled/url/lookback_days actually take effect.
+      - name: Install Python dependencies
+        run: |
+          python3 -m venv /tmp/research-agent-venv
+          echo "/tmp/research-agent-venv/bin" >> "$GITHUB_PATH"
+          /tmp/research-agent-venv/bin/pip install --quiet pyyaml
+
       - name: Install OPA CLI
         run: |
           curl -sL https://github.com/open-policy-agent/opa/releases/download/v0.68.0/opa_linux_amd64_static \

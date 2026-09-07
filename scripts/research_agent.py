@@ -114,48 +114,98 @@ def _fetch_with_retry(
 
 
 # ---------------------------------------------------------------------------
+# Threat feed configuration
+# ---------------------------------------------------------------------------
+
+_DEFAULT_THREAT_FEED_CONFIG = {
+    "nvd": {
+        "url": "https://services.nvd.nist.gov/rest/json/cves/2.0",
+        "enabled": True,
+        "lookback_days": 30,
+    },
+    "cisa_kev": {
+        "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+        "enabled": True,
+    },
+}
+
+
+def _load_threat_feed_config() -> dict:
+    """Load policies/research/threat-feed.yaml so its enabled/url/lookback_days
+    fields actually control what gets fetched, instead of being
+    documentation nobody consults. Falls back to hardcoded defaults
+    (matching the feed file's own defaults) if it's missing or malformed.
+    """
+    path = Path("policies/research/threat-feed.yaml")
+    if not path.exists():
+        return _DEFAULT_THREAT_FEED_CONFIG
+    try:
+        import yaml  # noqa: PLC0415 - optional dependency, only needed here
+        with open(path) as fh:
+            data = yaml.safe_load(fh) or {}
+        feeds = data.get("feeds")
+        return feeds if isinstance(feeds, dict) else _DEFAULT_THREAT_FEED_CONFIG
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: could not load threat-feed.yaml: {exc}", file=sys.stderr)
+        return _DEFAULT_THREAT_FEED_CONFIG
+
+
+# ---------------------------------------------------------------------------
 # Connection test
 # ---------------------------------------------------------------------------
 
 def test_connections() -> dict[str, dict]:
     """Test all external API connections before running the full scan.
 
-    Returns a dict mapping source name → ``{"status": "connected"|"failed", ...}``.
+    Returns a dict mapping source name → ``{"status": "connected"|"failed"|"disabled", ...}``.
     Prints a one-line status line for each source.
     """
     results: dict[str, dict] = {}
+    feeds = _load_threat_feed_config()
 
     # Test NVD API
-    try:
-        data  = json.loads(_fetch_with_retry(
-            "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=1",
-            headers={"User-Agent": "agent-guardrails/1.0"},
-        ))
-        count = data.get("totalResults", 0)
-        results["nvd"] = {"status": "connected", "total_cves": count}
-        print(f"✅ NVD API: {count} CVEs available")
-    except Exception as exc:  # noqa: BLE001
-        results["nvd"] = {"status": "failed", "error": str(exc)}
-        print(f"❌ NVD API: {exc}")
+    nvd_cfg = feeds.get("nvd", _DEFAULT_THREAT_FEED_CONFIG["nvd"])
+    if nvd_cfg.get("enabled", True):
+        nvd_url = nvd_cfg.get("url", _DEFAULT_THREAT_FEED_CONFIG["nvd"]["url"])
+        try:
+            data  = json.loads(_fetch_with_retry(
+                f"{nvd_url}?resultsPerPage=1",
+                headers={"User-Agent": "agent-guardrails/1.0"},
+            ))
+            count = data.get("totalResults", 0)
+            results["nvd"] = {"status": "connected", "total_cves": count}
+            print(f"✅ NVD API: {count} CVEs available")
+        except Exception as exc:  # noqa: BLE001
+            results["nvd"] = {"status": "failed", "error": str(exc)}
+            print(f"❌ NVD API: {exc}")
+    else:
+        results["nvd"] = {"status": "disabled"}
+        print("⏭️  NVD API: disabled in threat-feed.yaml")
 
     # Test CISA KEV
-    try:
-        data  = json.loads(_fetch_with_retry(
-            "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
-            headers={"User-Agent": "agent-guardrails/1.0"},
-        ))
-        vulns = data.get("vulnerabilities", [])
-        results["cisa"] = {"status": "connected", "total_vulns": len(vulns)}
-        print(f"✅ CISA KEV: {len(vulns)} vulnerabilities")
-    except Exception as exc:  # noqa: BLE001
-        results["cisa"] = {"status": "failed", "error": str(exc)}
-        print(f"❌ CISA KEV: {exc}")
+    cisa_cfg = feeds.get("cisa_kev", _DEFAULT_THREAT_FEED_CONFIG["cisa_kev"])
+    if cisa_cfg.get("enabled", True):
+        cisa_url = cisa_cfg.get("url", _DEFAULT_THREAT_FEED_CONFIG["cisa_kev"]["url"])
+        try:
+            data  = json.loads(_fetch_with_retry(
+                cisa_url,
+                headers={"User-Agent": "agent-guardrails/1.0"},
+            ))
+            vulns = data.get("vulnerabilities", [])
+            results["cisa"] = {"status": "connected", "total_vulns": len(vulns)}
+            print(f"✅ CISA KEV: {len(vulns)} vulnerabilities")
+        except Exception as exc:  # noqa: BLE001
+            results["cisa"] = {"status": "failed", "error": str(exc)}
+            print(f"❌ CISA KEV: {exc}")
+    else:
+        results["cisa"] = {"status": "disabled"}
+        print("⏭️  CISA KEV: disabled in threat-feed.yaml")
 
     # Write failing sources to GITHUB_OUTPUT so the workflow classifier can
     # read them without parsing stdout.
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:
-        failing = [name for name, r in results.items() if r["status"] != "connected"]
+        failing = [name for name, r in results.items() if r["status"] == "failed"]
         with open(github_output, "a") as fh:
             fh.write(f"failing_sources={','.join(failing)}\n")
 
@@ -168,12 +218,19 @@ def test_connections() -> dict[str, dict]:
 
 def fetch_nvd(max_cves: int = 100) -> list[dict]:
     """Fetch recent CVEs from NVD relevant to CI/CD and container tooling."""
+    feeds = _load_threat_feed_config()
+    nvd_cfg = feeds.get("nvd", _DEFAULT_THREAT_FEED_CONFIG["nvd"])
+    if not nvd_cfg.get("enabled", True):
+        print("NVD fetch skipped — disabled in threat-feed.yaml")
+        return []
+    base_url = nvd_cfg.get("url", _DEFAULT_THREAT_FEED_CONFIG["nvd"]["url"])
+
     keywords = [
         "Harness", "OPA", "Open Policy Agent", "GitHub Actions",
         "Docker", "Kubernetes", "CI/CD", "supply chain", "secrets",
     ]
 
-    lookback_days = _lookback_window()
+    lookback_days = _lookback_window(default=nvd_cfg.get("lookback_days", 30))
     end_date   = datetime.now(timezone.utc)
     start_date = end_date - timedelta(days=lookback_days)
     start_str  = start_date.strftime("%Y-%m-%dT%H:%M:%S.000")
@@ -184,7 +241,7 @@ def fetch_nvd(max_cves: int = 100) -> list[dict]:
 
     for kw in keywords:
         url = (
-            f"https://services.nvd.nist.gov/rest/json/cves/2.0"
+            f"{base_url}"
             f"?keywordSearch={urllib.parse.quote(kw)}"
             f"&pubStartDate={start_str}&pubEndDate={end_str}"
             f"&resultsPerPage={per_keyword}"
@@ -234,12 +291,15 @@ def fetch_nvd(max_cves: int = 100) -> list[dict]:
 
 def fetch_cisa() -> list[dict]:
     """Fetch recently-added CISA Known Exploited Vulnerabilities relevant to CI/CD."""
+    feeds = _load_threat_feed_config()
+    cisa_cfg = feeds.get("cisa_kev", _DEFAULT_THREAT_FEED_CONFIG["cisa_kev"])
+    if not cisa_cfg.get("enabled", True):
+        print("CISA KEV fetch skipped — disabled in threat-feed.yaml")
+        return []
+    url = cisa_cfg.get("url", _DEFAULT_THREAT_FEED_CONFIG["cisa_kev"]["url"])
+
     lookback_days = _lookback_window()
     cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
-    url    = (
-        "https://www.cisa.gov/sites/default/files/feeds/"
-        "known_exploited_vulnerabilities.json"
-    )
     ci_cd_keywords = [
         "docker", "kubernetes", "github", "jenkins", "gitlab",
         "harness", "container", "pipeline", "registry", "ci",
@@ -441,12 +501,13 @@ def update_log(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _lookback_window() -> int:
+def _lookback_window(default: int = 30) -> int:
     """Return the lookback window in days.
 
-    Uses the LOOKBACK_DAYS environment variable (default: 30).
+    Uses the LOOKBACK_DAYS environment variable if set, else `default`
+    (normally threat-feed.yaml's nvd.lookback_days).
     """
-    return int(os.environ.get("LOOKBACK_DAYS", "30"))
+    return int(os.environ.get("LOOKBACK_DAYS", str(default)))
 
 
 # ---------------------------------------------------------------------------
@@ -483,7 +544,7 @@ def main() -> int:
     # --test-connections: probe APIs and exit immediately
     if args.test_connections:
         results = test_connections()
-        all_ok  = all(v["status"] == "connected" for v in results.values())
+        all_ok  = all(v["status"] in ("connected", "disabled") for v in results.values())
         return 0 if all_ok else 1
 
     # --force-scan: ensure a 30-day lookback when no LOOKBACK_DAYS is set
