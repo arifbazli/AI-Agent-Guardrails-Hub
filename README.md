@@ -1,4 +1,4 @@
-# Cloud-AI-Agent-Guardrails
+# AI Agent Guardrails Hub
 
 Self-healing OPA/Rego guardrails for Harness CI/CD pipelines and Pi
 coding-agent workflows. A multi-agent hub evaluates policy, auto-fixes
