@@ -1,0 +1,47 @@
+# ============================================================
+# Pi Agent Activity Payload — schema reference + CI fallback fixture
+#
+# A Pi coding agent (pi.dev) run should commit a file named
+# pi-agent-activity.yaml (this exact filename) describing what it actually
+# did in a PR — bash commands run, workflow steps taken, files it wrote —
+# so the Loop Engine's Pi Workflow Loop can evaluate PI-001..PI-010 for
+# real via `opa eval` against policies/pi/*.rego, instead of only checking
+# the policy files' own Rego syntax.
+#
+# When a PR does not include such a file, the Loop Engine falls back to
+# THIS checked-in fixture (see scripts/loop_engine.py:find_pi_activity_file)
+# so there is always something to evaluate. This fixture is intentionally
+# fully compliant — it should produce zero PI-* violations.
+#
+# Schema matches .github/agents/pi-guardrail-agent.md's Input Payload.
+# ============================================================
+
+pi_agent:
+  version: "2.1.0"
+  bash_security_level: "L4"
+  human_approval_completed: true
+  bash_commands:
+    - "pytest tests/"
+    - "git add ."
+    - "git commit -m 'fix: update handler'"
+    - "gh pr create"
+  workflow_steps:
+    - action: "pytest"
+      outcome: "pass"
+      tests_passed: true
+      timestamp: "2026-09-07T10:00:00Z"
+    - action: "gh pr create"
+      outcome: "pass"
+      timestamp: "2026-09-07T10:01:00Z"
+
+files:
+  - path: "app.py"
+    content: |
+      def handler():
+          return "ok"
+    lint_status: "pass"
+    lint_errors: []
+    functions:
+      - name: "handler"
+    tests:
+      - name: "test_handler"

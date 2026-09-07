@@ -724,53 +724,37 @@ class PiAutoFixer:
 
     # ---- individual fixes --------------------------------------------------
 
+    # PI-001, PI-002, PI-003, and PI-004 are all evaluated against a real
+    # pi_agent ACTIVITY RECORD (what a Pi agent already did — see
+    # PiOpaEvaluator / find_pi_activity_file) now that the Pi loop performs
+    # real evaluation instead of only checking policy-file Rego syntax.
+    # Editing that record after the fact — bumping bash_security_level to
+    # L4, deleting a command it already ran, inserting a test step it never
+    # actually executed — wouldn't fix anything; it would falsify the audit
+    # trail of what happened, the same reasoning _fix_pi_005 already
+    # applies to human_approval_completed. These are intentional no-ops:
+    # the violation persists so the loop escalates to a human instead.
+
     def _fix_pi_001(self, v: Violation) -> None:
-        self._upgrade_bash_level(v.file)
+        self._no_fix_activity_record(v, "PI-001")
 
     def _fix_pi_002(self, v: Violation) -> None:
-        self._upgrade_bash_level(v.file)
-
-    @staticmethod
-    def _upgrade_bash_level(filepath: str) -> None:
-        """Set bash_security_level to L4 in the pi_agent config file."""
-        path = Path(filepath)
-        if not path.exists():
-            return
-        text = path.read_text()
-        new_text = re.sub(
-            r'(bash_security_level:\s*)["\']?L[1-3]["\']?',
-            r'\1L4  # AUTO-FIXED: upgraded to L4',
-            text,
-        )
-        path.write_text(new_text)
+        self._no_fix_activity_record(v, "PI-002")
 
     def _fix_pi_003(self, v: Violation) -> None:
-        """Remove blocked bash command from bash_commands list."""
-        path = Path(v.file)
-        if not path.exists():
-            return
-        text = path.read_text()
-        # Heuristic: remove lines containing known high-risk commands
-        blocked = [r"rm\s+-rf", r"curl\s+.*\|\s*sh", r"wget\s+.*\|\s*sh", r"chmod\s+777"]
-        new_text = text
-        for pat in blocked:
-            new_text = re.sub(rf"^\s*-\s+.*{pat}.*\n", "", new_text, flags=re.MULTILINE | re.IGNORECASE)
-        path.write_text(new_text)
+        self._no_fix_activity_record(v, "PI-003")
 
     def _fix_pi_004(self, v: Violation) -> None:
-        """Add pytest step before gh pr create in workflow config."""
-        path = Path(v.file)
-        if not path.exists():
-            return
-        text = path.read_text()
-        if "pytest" not in text:
-            new_text = re.sub(
-                r'(gh pr create)',
-                'pytest\n        - run: gh pr create',
-                text,
-                count=1,
-            )
-            path.write_text(new_text)
+        self._no_fix_activity_record(v, "PI-004")
+
+    @staticmethod
+    def _no_fix_activity_record(v: Violation, rule_id: str) -> None:
+        print(
+            f"[PiAutoFixer] {rule_id} describes what already happened in the "
+            f"pi_agent activity record and cannot be auto-fixed — leaving "
+            f"{v.file} unchanged.",
+            file=sys.stderr,
+        )
 
     def _fix_pi_005(self, v: Violation) -> None:
         """PI-005 (human approval gate) can never be auto-fixed.
@@ -1385,6 +1369,86 @@ class OpaEvaluator(BaseEvaluator):
         return EvalResult(passed=len(violations) == 0, violations=violations, raw_output=raw)
 
 
+class PiOpaEvaluator(BaseEvaluator):
+    """Evaluates a real pi_agent activity payload against all three
+    policies/pi/*.rego packages (pi.guardrails.bash/workflow/code) in one
+    `opa eval` call, combining their violation sets.
+
+    Unlike RegoSyntaxEvaluator (which only checks that the *policy files*
+    parse as valid Rego), this actually runs the PI-001..PI-010 rules
+    against what a Pi coding agent did — see find_pi_activity_file().
+    """
+
+    def __init__(self, activity_path: str) -> None:
+        self.activity_path = activity_path
+
+    def evaluate(self) -> EvalResult:
+        try:
+            import yaml as _yaml  # noqa: PLC0415
+            with open(self.activity_path) as fh:
+                input_doc = _yaml.safe_load(fh) or {}
+        except Exception as exc:  # noqa: BLE001
+            return EvalResult(passed=False, raw_output=str(exc), violations=[
+                Violation(rule_id="OPA-ERROR", severity="CRITICAL", file=self.activity_path, description=str(exc))
+            ])
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", prefix="pi_loop_eval_", delete=False
+        ) as tmp:
+            json.dump(input_doc, tmp)
+            input_path = tmp.name
+
+        cmd = [
+            OPA_PATH, "eval",
+            "--data", "policies/pi",
+            "--input", input_path,
+            "--format", "json",
+            "data.pi.guardrails",
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=60)
+            raw = proc.stdout
+            data = json.loads(raw) if raw else {}
+        except (FileNotFoundError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
+            return EvalResult(passed=False, raw_output=str(exc), violations=[
+                Violation(rule_id="OPA-ERROR", severity="CRITICAL", file=self.activity_path, description=str(exc))
+            ])
+        finally:
+            try:
+                os.unlink(input_path)
+            except OSError:
+                pass
+
+        violations: list[Violation] = []
+        for r in data.get("result", []):
+            for expr in r.get("expressions", []):
+                val = expr.get("value", {})
+                if not isinstance(val, dict):
+                    continue
+                # val looks like {"bash": {"violation": [...], ...},
+                # "workflow": {...}, "code": {...}} — one key per
+                # pi.guardrails.* sub-package.
+                for subpkg_data in val.values():
+                    if not isinstance(subpkg_data, dict):
+                        continue
+                    for item in subpkg_data.get("violation", []):
+                        if isinstance(item, dict) and "rule" in item:
+                            violations.append(Violation(
+                                # PI-006/007/008 violations carry the actual
+                                # offending source file in "file" (see
+                                # code-standards.rego); workflow/agent-level
+                                # violations (PI-001/002/003/004/005/009/010)
+                                # have no such field and fall back to the
+                                # activity payload itself.
+                                rule_id=item.get("rule", "UNKNOWN"),
+                                severity=item.get("severity", "MEDIUM"),
+                                file=item.get("file", self.activity_path),
+                                description=item.get("issue", item.get("message", "")),
+                            ))
+
+        return EvalResult(passed=len(violations) == 0, violations=violations, raw_output=raw)
+
+
 class RegoSyntaxEvaluator(BaseEvaluator):
     """Validates .rego file syntax using `opa check`."""
 
@@ -1492,12 +1556,51 @@ def _run_harness_loop(max_attempts: int) -> LoopResult:
     return worst
 
 
+PI_ACTIVITY_FILENAME = "pi-agent-activity.yaml"
+
+
+def find_pi_activity_file(pr_branch: str = "") -> str | None:
+    """Find a Pi-agent activity payload changed in this PR, falling back to
+    the checked-in fixture (test-inputs/pi-agent-activity.yaml) when none
+    is present — e.g. a PR that doesn't touch Pi agent work, or running
+    outside a PR context.
+
+    A Pi coding agent is expected to commit a file with this exact name
+    (schema documented in .github/agents/pi-guardrail-agent.md) describing
+    what it actually did — bash commands run, workflow steps taken, files
+    it wrote — so PI-001..PI-010 can be evaluated for real.
+    """
+    changed = get_pr_changed_files(pr_branch)
+    for f in changed:
+        if os.path.basename(f) == PI_ACTIVITY_FILENAME and os.path.exists(f):
+            return f
+    fallback = Path("test-inputs") / PI_ACTIVITY_FILENAME
+    if fallback.exists():
+        return str(fallback)
+    return None
+
+
 def _run_pi_loop(max_attempts: int) -> LoopResult:
-    """Run the Pi OPA loop over policies/pi/ .rego files."""
-    evaluator = RegoSyntaxEvaluator("policies/pi")
-    fixer     = PiAutoFixer()
-    context   = {"rule_id": "PI-*"}
-    engine    = LoopEngine("pi", context, max_attempts)
+    """Run the Pi loop against a real pi_agent activity payload when one is
+    available (PR-changed or the checked-in fixture) via PiOpaEvaluator;
+    falls back to a Rego syntax check of policies/pi/*.rego only if no
+    activity payload exists anywhere (should not happen in practice, since
+    the checked-in fixture is always present, but kept as a defensive
+    fallback for a repo checkout that's missing test-inputs/).
+    """
+    pr_branch = os.environ.get("GITHUB_REF_NAME", "")
+    activity_file = find_pi_activity_file(pr_branch)
+
+    if activity_file is None:
+        print("[pi-loop] No pi-agent-activity.yaml found anywhere — falling back to Rego syntax check only")
+        evaluator = RegoSyntaxEvaluator("policies/pi")
+    else:
+        print(f"[pi-loop] Evaluating real pi_agent activity from {activity_file}")
+        evaluator = PiOpaEvaluator(activity_file)
+
+    fixer   = PiAutoFixer()
+    context = {"rule_id": "PI-*", "file": activity_file or "policies/pi"}
+    engine  = LoopEngine("pi", context, max_attempts)
     return engine.run(evaluator, fixer)
 
 
