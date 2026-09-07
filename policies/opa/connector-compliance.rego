@@ -31,7 +31,9 @@ default violation_count = 0
 
 connector_id(connector) := connector.connector.identifier if {
     connector.connector.identifier
-} else := connector.identifier
+} else := connector.identifier if {
+    connector.identifier
+} else := "<unknown-connector>"
 
 # ---------------------------------------------------------------------------
 # RULE: CC-001 — All connectors must use secret references
@@ -43,6 +45,7 @@ connector_id(connector) := connector.connector.identifier if {
 violation contains msg if {
     connector := input.connectors[_]
     credential_field := connector.spec.credentials[field]
+    is_string(credential_field)
     not startswith(credential_field, "<+secrets")
     not startswith(credential_field, "${ngSecretManager")
     is_credential_field(field)
@@ -53,6 +56,24 @@ violation contains msg if {
         "field":     field,
         "issue":     sprintf("Connector '%v' field '%v' contains a plaintext value instead of a secret reference.", [connector_id(connector), field]),
         "fix":       "Replace the plaintext value with a Harness Secret Manager reference: <+secrets.getValue(\"secret-name\")>.",
+    }
+}
+
+# A non-string credential value (e.g. a nested object) previously made
+# startswith() undefined, silently skipping the field entirely instead of
+# flagging it as suspicious.
+violation contains msg if {
+    connector := input.connectors[_]
+    credential_field := connector.spec.credentials[field]
+    not is_string(credential_field)
+    is_credential_field(field)
+    msg := {
+        "rule":      "CC-001",
+        "severity":  "CRITICAL",
+        "connector": connector_id(connector),
+        "field":     field,
+        "issue":     sprintf("Connector '%v' field '%v' has a non-string credential value, which cannot be verified as a secret reference.", [connector_id(connector), field]),
+        "fix":       "Ensure the credential field is a string-valued Harness Secret Manager reference: <+secrets.getValue(\"secret-name\")>.",
     }
 }
 
@@ -115,14 +136,14 @@ approved_auth_types := {
 
 violation contains msg if {
     connector := input.connectors[_]
-    connector.spec.authentication.type
-    not connector.spec.authentication.type in approved_auth_types
+    auth_type := object.get(connector, ["spec", "authentication", "type"], "MISSING")
+    not auth_type in approved_auth_types
     msg := {
         "rule":      "CC-003",
         "severity":  "HIGH",
         "connector": connector_id(connector),
-        "auth_type": connector.spec.authentication.type,
-        "issue":     sprintf("Connector '%v' uses a non-approved authentication type: '%v'.", [connector_id(connector), connector.spec.authentication.type]),
+        "auth_type": auth_type,
+        "issue":     sprintf("Connector '%v' uses a non-approved authentication type: '%v'.", [connector_id(connector), auth_type]),
         "fix":       sprintf("Replace the authentication type with one of the approved types: %v.", [approved_auth_types]),
     }
 }

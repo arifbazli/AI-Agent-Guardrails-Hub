@@ -576,7 +576,10 @@ violation contains msg if {
 #            docs/violation-remediation.md#rrp-012
 # ---------------------------------------------------------------------------
 
-deploy_stage_types := {"Deployment", "Deploy"}
+# Must match pipeline-guardrails.rego's active PG-005/PG-007 convention
+# exactly (exact-match "Deployment" only) — this file previously also
+# accepted "Deploy", a schema this repo's active rules never recognise.
+deploy_stage_types := {"Deployment"}
 
 provenance_verify_step_types := {"SlsaVerify", "CosignVerify", "ArtifactVerify"}
 
@@ -768,18 +771,21 @@ violation contains msg if {
 #            docs/violation-remediation.md#rrp-017
 # ---------------------------------------------------------------------------
 
+# Match against the env var KEY (name), mirroring PG-002's
+# secret_key_patterns convention — matching against env_val instead (the
+# previous approach) misses realistic plaintext secret values like
+# "hunter2" that don't literally contain "password=" etc.
 secret_like_patterns := [
-    `(?i)password\s*[:=]\s*[^$<\s]{6,}`,
-    `(?i)api.?key\s*[:=]\s*[^$<\s]{8,}`,
-    `(?i)token\s*[:=]\s*[^$<\s]{8,}`,
-    `(?i)secret\s*[:=]\s*[^$<\s]{6,}`,
-    `(?i)access.?key\s*[:=]\s*[^$<\s]{8,}`,
+    "(?i)(password|passwd|pwd)",
+    "(?i)(secret|token|api[_-]?key)",
+    "(?i)(access[_-]?key|private[_-]?key)",
+    "(?i)(credential|auth[_-]?token)",
 ]
 
-env_var_has_plaintext_secret(env_val) if {
+env_var_has_plaintext_secret(env_key, env_val) if {
     is_string(env_val)
     pattern := secret_like_patterns[_]
-    regex.match(pattern, env_val)
+    regex.match(pattern, env_key)
     not startswith(env_val, "<+secrets")
     not startswith(env_val, "<+env")
 }
@@ -788,9 +794,10 @@ violation contains msg if {
     # Rule: RRP-017
     stage   := input.pipeline.stages[_]
     step    := stage.spec.execution.steps[_]
-    env_key := step.step.spec.envVariables[_]
-    env_val := step.step.spec.envVariables[env_key]
-    env_var_has_plaintext_secret(env_val)
+    env_vars := step.step.spec.envVariables
+    some env_key
+    env_val := env_vars[env_key]
+    env_var_has_plaintext_secret(env_key, env_val)
     msg := {
         "rule":     "RRP-017",
         "cve":      "CVE-2026-32847",

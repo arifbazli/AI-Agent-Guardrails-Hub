@@ -352,6 +352,23 @@ test_pg006_pass_named_delegate_selector {
     count([v | v := result[_]; v.rule == "PG-006"]) == 0
 }
 
+test_pg006_violation_wildcard_in_flat_delegate_selectors {
+    # has_delegate_selector (PG-005) treats the flat stage.spec.delegateSelectors
+    # path as equally valid to the nested infra path — PG-006 must catch a
+    # wildcard there too, not just under infrastructure.spec.
+    result := guardrails.violation with input as {
+        "pipeline": {"stages": [{
+            "name": "deploy",
+            "type": "Deployment",
+            "spec": {
+                "delegateSelectors": ["*"],
+                "execution": {"steps": []},
+            },
+        }]},
+    }
+    count([v | v := result[_]; v.rule == "PG-006"]) > 0
+}
+
 # ---------------------------------------------------------------------------
 # PG-007 — Rollback strategy required for production deployments
 # ---------------------------------------------------------------------------

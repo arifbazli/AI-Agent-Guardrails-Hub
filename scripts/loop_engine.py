@@ -84,17 +84,45 @@ class FixRecord:
 # Fix-target helpers
 # ---------------------------------------------------------------------------
 
+def _unwrap_stage(stage_entry: Any) -> Any:
+    """Unwrap a Harness ``{"stage": {...}}`` entry to the flat stage dict.
+
+    Real Harness pipeline YAML nests each stage under a ``stage:`` key,
+    e.g. ``stages: [{"stage": {"name": ..., "type": ..., "spec": ...}}]``
+    (see docs/policy-guide.md and test-inputs/human-pr-test.yaml). But
+    policies/opa/pipeline-guardrails.rego reads stage fields directly off
+    each ``input.pipeline.stages[_]`` entry (``stage.type``, ``stage.spec``,
+    ``stage.timeout``). Left un-unwrapped, every stage-level rule (PG-001,
+    PG-002, PG-003, PG-005, PG-006, PG-007) silently sees no matching field
+    and never fires — the pipeline evaluates as compliant regardless of its
+    actual contents.
+    """
+    if isinstance(stage_entry, dict) and isinstance(stage_entry.get("stage"), dict):
+        return stage_entry["stage"]
+    return stage_entry
+
+
 def yaml_to_opa_input(pipeline_yaml: dict) -> dict:
     """Convert pipeline YAML to OPA input JSON.
 
     Wraps the yaml content in the expected input structure for
     ``data.harness.pipeline.guardrails``.  If the document already contains a
-    top-level ``pipeline`` key it is returned as-is; otherwise the whole
-    document is treated as the pipeline body and wrapped accordingly.
+    top-level ``pipeline`` key it is used as-is; otherwise the whole
+    document is treated as the pipeline body and wrapped accordingly. Each
+    stage entry is also unwrapped from Harness's ``stage:`` nesting (see
+    :func:`_unwrap_stage`) so stage-level rules see the real fields
+    regardless of whether the source YAML uses the wrapped or flat form.
     """
     if isinstance(pipeline_yaml, dict) and "pipeline" in pipeline_yaml:
-        return pipeline_yaml
-    return {"pipeline": pipeline_yaml}
+        doc = pipeline_yaml
+    else:
+        doc = {"pipeline": pipeline_yaml}
+
+    pipeline = doc.get("pipeline")
+    if isinstance(pipeline, dict) and isinstance(pipeline.get("stages"), list):
+        pipeline["stages"] = [_unwrap_stage(s) for s in pipeline["stages"]]
+
+    return doc
 
 
 def get_pr_yaml_files(pr_branch: str = "") -> list[str]:
@@ -105,11 +133,16 @@ def get_pr_yaml_files(pr_branch: str = "") -> list[str]:
     found (e.g. running locally or without a PR branch).
     """
     base = f"origin/{pr_branch}" if pr_branch else "origin/main"
-    result = subprocess.run(
-        ["git", "diff", "--name-only", f"{base}...HEAD"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", f"{base}...HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"[get_pr_yaml_files] git diff timed out against {base} — falling back to test-inputs/", file=sys.stderr)
+        result = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="timeout")
     changed = result.stdout.strip().split("\n")
 
     yaml_files: list[str] = []
@@ -142,11 +175,16 @@ def get_pr_changed_files(pr_branch: str = "") -> list[str]:
         ``origin/<pr_branch>``; otherwise ``origin/main`` is used as the base.
     """
     base = f"origin/{pr_branch}" if pr_branch else "origin/main"
-    result = subprocess.run(
-        ["git", "diff", "--name-only", f"{base}...HEAD"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", f"{base}...HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"[get_pr_changed_files] git diff timed out against {base}", file=sys.stderr)
+        return []
     raw = result.stdout.strip()
     if not raw:
         return []
@@ -223,6 +261,20 @@ class LoopLogger:
                     "|---|---|---|---|---|---|---|\n"
                 )
                 fh.write(entry + "\n")
+
+# ---------------------------------------------------------------------------
+# Approved image registry prefixes — single source of truth, mirroring
+# policies/opa/pipeline-guardrails.rego's approved_registries. Previously
+# _fix_registry() and _fix_pg_003() each hardcoded their own divergent list.
+# ---------------------------------------------------------------------------
+
+APPROVED_REGISTRY_PREFIXES = (
+    "gcr.io/deloitte-",
+    "us-docker.pkg.dev/deloitte-",
+    "eu-docker.pkg.dev/deloitte-",
+    "index.docker.io/deloitteinternal/",
+    "ghcr.io/deloitte-global-cloud-services/",
+)
 
 # ---------------------------------------------------------------------------
 # HarnessAutoFixer
@@ -315,13 +367,6 @@ class HarnessAutoFixer:
     def _fix_registry(content: dict) -> dict:
         """Replace unapproved image registry with gcr.io/deloitte-gcs/."""
         approved_prefix = "gcr.io/deloitte-gcs/"
-        approved_registries = (
-            "gcr.io/deloitte-",
-            "us-docker.pkg.dev/deloitte-",
-            "eu-docker.pkg.dev/deloitte-",
-            "ghcr.io/deloitte-global",
-            "index.docker.io/deloitteinternal",
-        )
         stages = content.get("pipeline", content).get("stages", [])
         for stage in stages:
             s     = stage.get("stage", stage)
@@ -330,7 +375,7 @@ class HarnessAutoFixer:
                 st    = step.get("step", step)
                 spec  = st.get("spec", {})
                 image = spec.get("image", "")
-                if image and not any(image.startswith(r) for r in approved_registries):
+                if image and not any(image.startswith(r) for r in APPROVED_REGISTRY_PREFIXES):
                     parts = image.split("/")
                     if len(parts) > 1 and ("." in parts[0] or ":" in parts[0]):
                         image_name = "/".join(parts[1:])
@@ -547,19 +592,11 @@ class HarnessAutoFixer:
             return
         text = path.read_text()
 
-        approved_prefixes = (
-            "gcr.io/deloitte-",
-            "us-docker.pkg.dev/deloitte-",
-            "eu-docker.pkg.dev/deloitte-",
-            "index.docker.io/deloitteinternal/",
-            "ghcr.io/deloitte-global-cloud-services/",
-        )
-
         def _fix_image(match: re.Match) -> str:
             prefix = match.group(1)   # "image: " or "image:"
             image_ref = match.group(2)  # full image reference
             # Skip images already from an approved registry
-            for approved in approved_prefixes:
+            for approved in APPROVED_REGISTRY_PREFIXES:
                 if image_ref.startswith(approved):
                     return match.group(0)
             # Strip the unapproved registry host (first path component that
@@ -736,19 +773,20 @@ class PiAutoFixer:
             path.write_text(new_text)
 
     def _fix_pi_005(self, v: Violation) -> None:
-        """Flag human_approval_completed — sets placeholder (requires human confirmation)."""
-        path = Path(v.file)
-        if not path.exists():
-            return
-        text = path.read_text()
-        new_text = re.sub(
-            r'(human_approval_completed:\s*)false',
-            r'\1true  # AUTO-FIXED: flagged — confirm before merge',
-            text,
+        """PI-005 (human approval gate) can never be auto-fixed.
+
+        Flipping human_approval_completed to true here would let the Loop
+        Engine grant its own approval — exactly the bypass
+        docs/violation-remediation.md prohibits ("No fully automated PR
+        submissions are permitted under any circumstances"). This is
+        intentionally a no-op: the violation persists until a human sets
+        the field themselves, so the loop escalates instead of self-approving.
+        """
+        print(
+            f"[PiAutoFixer] PI-005 requires a real human approval and cannot "
+            f"be auto-fixed — leaving {v.file} unchanged.",
+            file=sys.stderr,
         )
-        if "human_approval_completed:" not in new_text:
-            new_text += "\nhuman_approval_completed: true  # AUTO-FIXED: flagged — confirm before merge\n"
-        path.write_text(new_text)
 
     def _fix_pi_006(self, v: Violation) -> None:
         """Run autopep8 on the failing Python file."""
@@ -757,8 +795,9 @@ class PiAutoFixer:
                 ["autopep8", "--in-place", "--aggressive", v.file],
                 check=True,
                 capture_output=True,
+                timeout=60,
             )
-        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
             print(f"[PiAutoFixer] autopep8 unavailable or failed: {exc}", file=sys.stderr)
 
     def _fix_pi_007(self, v: Violation) -> None:
@@ -865,11 +904,14 @@ class ResearchAutoFixer:
                 [OPA_PATH, "check", str(path)],
                 capture_output=True,
                 text=True,
+                timeout=30,
             )
             if result.returncode != 0:
                 print(f"[ResearchAutoFixer] opa check still failing: {result.stderr}", file=sys.stderr)
         except FileNotFoundError:
             print("[ResearchAutoFixer] opa binary not found — skipping validation", file=sys.stderr)
+        except subprocess.TimeoutExpired:
+            print("[ResearchAutoFixer] opa check timed out after 30s — skipping validation", file=sys.stderr)
 
     @staticmethod
     def _fix_duplicate_rule_id(v: Violation) -> None:
@@ -971,8 +1013,62 @@ class LoopNotifier:
                 print(f"[LoopNotifier] Issue created: {issue_url}")
                 return issue_url
         except Exception as exc:  # noqa: BLE001
-            print(f"[LoopNotifier] Failed to create issue: {exc}", file=sys.stderr)
+            print(f"::error::[LoopNotifier] Failed to create escalation issue: {exc}", file=sys.stderr)
             return ""
+
+    def notify_secret_masked(self, violations: list[Violation]) -> None:
+        """PG-002 auto-fix only masks the plaintext value in YAML — it does
+        not rotate the underlying credential. docs/violation-remediation.md
+        requires escalating to Security immediately whenever a secret may
+        have been exposed, so this fires unconditionally whenever PG-002 is
+        auto-fixed, independent of whether the loop ultimately PASSes.
+        """
+        if not self.token or not self.repo:
+            print(
+                "[LoopNotifier] GITHUB_TOKEN or GITHUB_REPOSITORY not set — "
+                "skipping PG-002 security notification",
+                file=sys.stderr,
+            )
+            return
+        details = "; ".join(sorted({v.description for v in violations})) or "unknown field"
+        body = textwrap.dedent(f"""\
+            ## 🔐 Possible Credential Exposure — Manual Rotation Required
+
+            The Loop Engine auto-fixer replaced a plaintext secret value with a
+            Harness Secret Manager reference (rule PG-002), but this does NOT
+            rotate the underlying credential.
+
+            **Pipeline:** `{self.pipeline}`
+            **Details:** {details}
+
+            ## Action Required
+            Per docs/violation-remediation.md, PG-002 permits no exceptions:
+            rotate the exposed credential in the source system immediately,
+            then confirm the new secret is registered in Harness Secret Manager.
+        """)
+        payload = json.dumps({
+            "title": f"🔐 Loop Engine: possible credential exposure — {self.pipeline} PG-002",
+            "body":  body,
+            "labels": ["needs-human-review"],
+        }).encode()
+        url = f"https://api.github.com/repos/{self.repo}/issues"
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "Authorization": f"token {self.token}",
+                "Accept":        "application/vnd.github+json",
+                "Content-Type":  "application/json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read())
+                print(f"[LoopNotifier] Security notification issue created: {data.get('html_url', '')}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"::error::[LoopNotifier] Failed to create security notification issue: {exc}", file=sys.stderr)
 
     def _post_pr_comment(self, issue_url: str, loop_history: list[FixRecord]) -> None:
         if not self.token or not self.repo or not self.pr_number:
@@ -1007,7 +1103,7 @@ class LoopNotifier:
                 data = json.loads(resp.read())
                 print(f"[LoopNotifier] PR comment posted: {data.get('html_url', '')}")
         except Exception as exc:  # noqa: BLE001
-            print(f"[LoopNotifier] Failed to post PR comment: {exc}", file=sys.stderr)
+            print(f"::error::[LoopNotifier] Failed to post PR comment: {exc}", file=sys.stderr)
 
 # ---------------------------------------------------------------------------
 # LoopEngine
@@ -1037,59 +1133,104 @@ class LoopEngine:
 
     # ------------------------------------------------------------------
 
+    def _severity_attempt_budget(self, violations: list[Violation]) -> int:
+        """Map the worst severity among current violations to an auto-fix
+        attempt budget, per Benchmark-agent.md's documented policy:
+        CRITICAL/HIGH get the full retry budget, MEDIUM gets exactly one
+        attempt, LOW is advisory only (no auto-fix loop at all).
+        """
+        severities = {v.severity.upper() for v in violations}
+        if "CRITICAL" in severities or "HIGH" in severities:
+            return self.max_attempts
+        if "MEDIUM" in severities:
+            return 1
+        if "LOW" in severities:
+            return 0
+        return self.max_attempts
+
     def run(self, evaluator: "BaseEvaluator", fixer: "BaseFixer") -> LoopResult:
         notifier = LoopNotifier(
             pipeline=self.pipeline_type,
             rule_id=self.context.get("rule_id", "UNKNOWN"),
             max_attempts=self.max_attempts,
         )
-        for attempt in range(1, self.max_attempts + 1):
-            result = evaluator.evaluate()
-            if result.passed:
-                LoopLogger.log(
-                    pipeline=self.pipeline_type,
-                    rule_id=self.context.get("rule_id", "UNKNOWN"),
-                    attempt=attempt,
-                    violation="",
-                    fix_applied="none",
-                    result=LoopResult.PASS,
-                )
-                print(f"[LoopEngine] PASS on attempt {attempt}")
-                return LoopResult.PASS
 
-            fix_description = fixer.generate_fix(result.violations)
-            fixer.apply_fix(result.violations)
-
-            record = FixRecord(
-                attempt=attempt,
-                violations=result.violations,
-                fix_applied=fix_description,
-                result=LoopResult.FAIL,
+        result = evaluator.evaluate()
+        if result.passed:
+            LoopLogger.log(
+                pipeline=self.pipeline_type,
+                rule_id=self.context.get("rule_id", "UNKNOWN"),
+                attempt=1,
+                violation="",
+                fix_applied="none",
+                result=LoopResult.PASS,
             )
-            self.loop_history.append(record)
+            print("[LoopEngine] PASS on attempt 1")
+            return LoopResult.PASS
 
+        max_attempts = self._severity_attempt_budget(result.violations)
+
+        if max_attempts == 0:
             for v in result.violations:
                 LoopLogger.log(
                     pipeline=self.pipeline_type,
                     rule_id=v.rule_id,
-                    attempt=attempt,
+                    attempt=0,
                     violation=v.description,
+                    fix_applied="advisory only — LOW severity is not auto-fixed",
+                    result=LoopResult.FAIL,
+                )
+            print("[LoopEngine] LOW-severity violations only — advising, no auto-fix loop")
+        else:
+            for attempt in range(1, max_attempts + 1):
+                if attempt > 1:
+                    result = evaluator.evaluate()
+                    if result.passed:
+                        LoopLogger.log(
+                            pipeline=self.pipeline_type,
+                            rule_id=self.context.get("rule_id", "UNKNOWN"),
+                            attempt=attempt,
+                            violation="",
+                            fix_applied="none",
+                            result=LoopResult.PASS,
+                        )
+                        print(f"[LoopEngine] PASS on attempt {attempt}")
+                        return LoopResult.PASS
+
+                fix_description = fixer.generate_fix(result.violations)
+                fixer.apply_fix(result.violations)
+
+                record = FixRecord(
+                    attempt=attempt,
+                    violations=result.violations,
                     fix_applied=fix_description,
                     result=LoopResult.FAIL,
                 )
-            print(f"[LoopEngine] Attempt {attempt} FAIL — fix applied: {fix_description}")
+                self.loop_history.append(record)
 
-        # All attempts exhausted
+                for v in result.violations:
+                    LoopLogger.log(
+                        pipeline=self.pipeline_type,
+                        rule_id=v.rule_id,
+                        attempt=attempt,
+                        violation=v.description,
+                        fix_applied=fix_description,
+                        result=LoopResult.FAIL,
+                    )
+                print(f"[LoopEngine] Attempt {attempt} FAIL — fix applied: {fix_description}")
+
+        # Attempt budget exhausted (or advisory-only LOW violations) — escalate
+        notifier.max_attempts = max_attempts
         notifier.escalate_to_human(self.loop_history)
         LoopLogger.log(
             pipeline=self.pipeline_type,
             rule_id=self.context.get("rule_id", "UNKNOWN"),
-            attempt=self.max_attempts,
+            attempt=max_attempts,
             violation="max attempts reached",
             fix_applied="escalated to human",
             result=LoopResult.ESCALATED,
         )
-        print(f"[LoopEngine] ESCALATED — all {self.max_attempts} attempts failed")
+        print(f"[LoopEngine] ESCALATED — {max_attempts} attempt(s) exhausted")
         return LoopResult.ESCALATED
 
 # ---------------------------------------------------------------------------
@@ -1155,10 +1296,10 @@ class OpaEvaluator(BaseEvaluator):
             self.query,
         ]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=60)
             raw = proc.stdout
             data = json.loads(raw) if raw else {}
-        except (FileNotFoundError, json.JSONDecodeError) as exc:
+        except (FileNotFoundError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
             return EvalResult(passed=False, raw_output=str(exc), violations=[
                 Violation(rule_id="OPA-ERROR", severity="CRITICAL", file=self.target_file, description=str(exc))
             ])
@@ -1230,10 +1371,19 @@ class RegoSyntaxEvaluator(BaseEvaluator):
         for rego_file in Path(self.rego_dir).rglob("*.rego"):
             if rego_file.name.endswith("_test.rego"):
                 continue
-            proc = subprocess.run(
-                [OPA_PATH, "check", str(rego_file)],
-                capture_output=True, text=True, check=False,
-            )
+            try:
+                proc = subprocess.run(
+                    [OPA_PATH, "check", str(rego_file)],
+                    capture_output=True, text=True, check=False, timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                violations.append(Violation(
+                    rule_id="REGO-SYNTAX",
+                    severity="HIGH",
+                    file=str(rego_file),
+                    description="opa check timed out after 30s",
+                ))
+                continue
             if proc.returncode != 0:
                 violations.append(Violation(
                     rule_id="REGO-SYNTAX",
@@ -1305,6 +1455,11 @@ def _run_harness_loop(max_attempts: int) -> LoopResult:
                 os.unlink(input_tmp_path)
             except OSError:
                 pass
+
+        pg002_fixes = [v for rec in engine.loop_history for v in rec.violations if v.rule_id == "PG-002"]
+        if pg002_fixes:
+            LoopNotifier(pipeline="harness", rule_id="PG-002", max_attempts=max_attempts).notify_secret_masked(pg002_fixes)
+
         if result == LoopResult.ESCALATED:
             worst = LoopResult.ESCALATED
         elif result == LoopResult.FAIL and worst == LoopResult.PASS:
@@ -1416,6 +1571,10 @@ def main() -> int:
         help="Action to perform",
     )
     args = parser.parse_args()
+
+    if args.max_attempts < 1:
+        print(f"Error: --max-attempts must be >= 1 (got {args.max_attempts})", file=sys.stderr)
+        return 1
 
     # Propagate pr_number so LoopNotifier can read it via env var
     if args.pr_number:

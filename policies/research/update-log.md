@@ -28,8 +28,8 @@ No changes required at initialisation.
 | `policies/opa/connector-compliance.rego` | 8 | CC-001 – CC-008 |
 | `policies/opa/delegate-validation.rego` | 8 | DV-001 – DV-008 |
 | `policies/pi/bash-security.rego` | 3 | PI-001 – PI-003 |
-| `policies/pi/code-standards.rego` | 4 | PI-004 – PI-007 |
-| `policies/pi/workflow-gates.rego` | 3 | PI-008 – PI-010 |
+| `policies/pi/workflow-gates.rego` | 3 | PI-004, PI-005, PI-010 |
+| `policies/pi/code-standards.rego` | 4 | PI-006 – PI-009 |
 
 **Total rules in baseline: 44**
 
@@ -120,8 +120,8 @@ No changes required at initialisation.
 | `policies/opa/connector-compliance.rego` | 8 | CC-001 – CC-008 |
 | `policies/opa/delegate-validation.rego` | 8 | DV-001 – DV-008 |
 | `policies/pi/bash-security.rego` | 3 | PI-001 – PI-003 |
-| `policies/pi/code-standards.rego` | 4 | PI-004 – PI-007 |
-| `policies/pi/workflow-gates.rego` | 3 | PI-008 – PI-010 |
+| `policies/pi/workflow-gates.rego` | 3 | PI-004, PI-005, PI-010 |
+| `policies/pi/code-standards.rego` | 4 | PI-006 – PI-009 |
 
 **Total rules in baseline: 44**
 

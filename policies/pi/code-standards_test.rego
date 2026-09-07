@@ -152,6 +152,21 @@ test_pi009_violation_unknown_version {
     count([v | v := result[_]; v.rule == "PI-009"]) > 0
 }
 
+test_pi009_violation_missing_version_field {
+    # version := input.pi_agent.version previously went undefined (no
+    # violation) when the field was absent entirely — must fail closed.
+    result := code.violation with input as {
+        "pi_agent": {},
+        "files": [],
+    }
+    count([v | v := result[_]; v.rule == "PI-009"]) > 0
+}
+
+test_pi009_violation_empty_input {
+    result := code.violation with input as {"files": []}
+    count([v | v := result[_]; v.rule == "PI-009"]) > 0
+}
+
 # ---------------------------------------------------------------------------
 # ALLOW
 # ---------------------------------------------------------------------------

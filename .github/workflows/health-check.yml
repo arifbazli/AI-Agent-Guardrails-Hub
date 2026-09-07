@@ -43,11 +43,15 @@ jobs:
             NAME=$(echo "$label" | cut -d'|' -f1)
             COLOR=$(echo "$label" | cut -d'|' -f2)
             DESC=$(echo "$label" | cut -d'|' -f3)
-            gh label create "$NAME" \
+            if gh label create "$NAME" \
+              --repo "${GITHUB_REPOSITORY}" \
               --color "$COLOR" \
               --description "$DESC" \
-              --force 2>/dev/null || true
-            echo "✅ $NAME"
+              --force; then
+              echo "✅ $NAME created/updated"
+            else
+              echo "⚠️  $NAME failed — see error above"
+            fi
           done
           echo "All labels verified" > $GITHUB_STEP_SUMMARY
 

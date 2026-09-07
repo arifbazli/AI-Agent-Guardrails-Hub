@@ -151,7 +151,7 @@ function_has_test(function, _) if {
 # ---------------------------------------------------------------------------
 
 violation contains msg if {
-    version := input.pi_agent.version
+    version := object.get(input, ["pi_agent", "version"], "MISSING")
     not version in approved_pi_versions
     msg := {
         "rule":     "PI-009",

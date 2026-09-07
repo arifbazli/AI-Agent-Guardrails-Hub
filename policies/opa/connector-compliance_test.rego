@@ -69,6 +69,31 @@ test_cc001_pass_ng_secret_manager_reference {
     count([v | v := result[_]; v.rule == "CC-001"]) == 0
 }
 
+test_cc001_violation_non_string_credential_value {
+    # is_string(credential_field) guard fix: a nested-object credential
+    # value previously made startswith() undefined, silently skipping the
+    # field instead of flagging it.
+    result := compliance.violation with input as {
+        "connectors": [{
+            "identifier": "github-prod-api",
+            "spec": {"credentials": {"password": {"nested": "object"}}},
+        }],
+    }
+    count([v | v := result[_]; v.rule == "CC-001"]) > 0
+}
+
+test_cc001_violation_with_no_identifier_under_either_schema {
+    # connector_id() previously went undefined when neither
+    # connector.connector.identifier nor connector.identifier was set,
+    # which silently dropped every violation message that embeds it.
+    result := compliance.violation with input as {
+        "connectors": [{
+            "spec": {"credentials": {"password": "plaintext-password"}},
+        }],
+    }
+    count([v | v := result[_]; v.rule == "CC-001"]) > 0
+}
+
 # ---------------------------------------------------------------------------
 # CC-002 — No expired connector credentials allowed
 # ---------------------------------------------------------------------------
@@ -135,6 +160,19 @@ test_cc003_pass_github_app_auth_type {
         }],
     }
     count([v | v := result[_]; v.rule == "CC-003"]) == 0
+}
+
+test_cc003_violation_missing_authentication_type {
+    # object.get(...) fail-open fix: previously the bare
+    # connector.spec.authentication.type existence check meant a connector
+    # that omitted the field entirely was never checked at all.
+    result := compliance.violation with input as {
+        "connectors": [{
+            "identifier": "internal-dev-svc",
+            "spec": {"authentication": {}},
+        }],
+    }
+    count([v | v := result[_]; v.rule == "CC-003"]) > 0
 }
 
 test_cc003_pass_oidc_auth_type {

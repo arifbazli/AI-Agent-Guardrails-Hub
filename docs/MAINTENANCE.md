@@ -109,7 +109,7 @@ Also:
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| OPA checksum mismatch | Pinned OPA version checksum stale | Switch install step to direct download without checksum verification |
+| OPA checksum mismatch | Pinned OPA version checksum stale | Update the pinned checksum to match the currently released OPA version. Do not disable checksum verification — OPA evaluates every guardrail in this repo, so an unverified binary is a supply-chain risk, not a workaround. |
 | opa: No such file or directory | OPA_PATH not exported before use | Confirm Export OPA path step runs before evaluation step |
 | git push rejected, fetch first | Two jobs committed to same branch at once | Confirm jobs run sequentially via needs:, not in parallel |
 | unrecognized arguments in loop_engine.py | Workflow passes a flag the script does not accept | Check argparse block matches every flag used in the yml |

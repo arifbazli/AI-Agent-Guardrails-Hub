@@ -48,6 +48,12 @@ defaults:
 
 # ---------------------------------------------------------------------------
 # STAGE GATES
+#
+# NOTE: env-dev in approval-rules.yaml intentionally has no corresponding
+# gate here. Gates in this file map to pipeline STAGES (build, test,
+# security-scan, staging, uat, production); env-dev's fast-iteration,
+# largely-automated model in approval-rules.yaml is a deliberate exception
+# to the staged-gate model, not a gap to fill in.
 # ---------------------------------------------------------------------------
 gates:
 
@@ -478,8 +484,8 @@ gates:
         condition: "environments.production.rollbackArtifact.digest != null"
         required: true
       - id: EC-PROD-04
-        description: Deployment window must be within allowed hours (07:00–21:00 UTC)
-        condition: "pipeline.executionTime.hourUTC >= 7 && pipeline.executionTime.hourUTC <= 21"
+        description: Deployment window must be within allowed hours (07:00–21:00 UTC) on Monday–Friday
+        condition: "pipeline.executionTime.hourUTC >= 7 && pipeline.executionTime.hourUTC <= 21 && pipeline.executionTime.dayOfWeek in ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY']"
         required: true
       - id: EC-PROD-05
         description: Change ticket (ServiceNow/Jira) must be in APPROVED state
@@ -536,6 +542,7 @@ gates:
           userGroups:
             - production-approvers
             - security-approvers
+          minimumPerGroup: 1
         message: >
           All pre-production gates have passed. This approval authorises
           deployment to PRODUCTION. Verify the change ticket, release notes,
@@ -545,6 +552,7 @@ gates:
           after: 4h
           escalateTo:
             - vp-engineering@deloitte.com
+            - ciso@deloitte.com
 
     notifications:
       onFailure:

@@ -1022,30 +1022,36 @@ intelligence sources and identify gaps in the current OPA rule set.
 
 ### What it does
 
-1. Fetches new CVEs from NVD, active exploits from CISA KEV, OWASP Top 10 
-   updates, and Harness platform release notes.
+1. Fetches new CVEs from NVD and active exploits from CISA KEV (OWASP and
+   Harness release notes are manually monitored — automated fetch for those
+   two sources is not yet implemented in `scripts/research_agent.py`).
 2. Compares findings against every `.rego` rule in `policies/opa/` and 
    `policies/pi/`.
 3. Flags threats that have no corresponding guardrail as **gaps**.
-4. Drafts new or updated `.rego` rules and matching `_test.rego` files.
-5. Opens a PR on branch `research/auto-<YYYY-MM-DD>` with all proposals.
+4. Logs each gap as `NEEDS_MANUAL_REVIEW` (rule assignment `TBD`) — the
+   current implementation does not autonomously draft `.rego` rule text.
+5. Files a GitHub Issue with the scan summary. GitHub Enterprise Cloud
+   policy prevents Actions from opening PRs directly, so a human drafts and
+   opens the rule-update PR manually after reviewing the Issue.
 6. Logs every run in `policies/research/update-log.md`.
 
 ### How to trigger it manually
 
 ```bash
 gh workflow run research-agent.yml \
-  --field trigger=on_demand
+  --field trigger_type=on_demand
 ```
 
-### Reviewing Research Agent PRs
+### Reviewing Research Agent Issues
 
-All Research Agent PRs carry the labels `automated`, `policy-update`, and 
-`needs-review`. Before merging:
+Research Agent scan summaries carry the labels `research-proposal` and 
+`needs-human-review`. Before drafting/merging a rule change based on one:
 
-1. Read each drafted rule and verify it correctly addresses the cited advisory.
-2. Run `opa test policies/` locally to confirm all test cases pass.
-3. Request a review from the Guardrail Enforcement Agent to validate OPA syntax.
+1. Read each flagged gap and verify it correctly addresses the cited advisory.
+2. Draft the `.rego` rule and a matching `_test.rego` case, then run 
+   `opa test policies/` locally to confirm all test cases pass.
+3. Open a PR yourself and request a review from the Guardrail Enforcement 
+   Agent to validate OPA syntax.
 4. Check that `docs/violation-remediation.md` has been updated for each new 
    rule ID.
 

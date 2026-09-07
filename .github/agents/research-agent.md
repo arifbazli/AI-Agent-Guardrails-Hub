@@ -7,8 +7,16 @@ description: Automated policy research agent that monitors external threat intel
 
 This agent continuously monitors external threat intelligence sources and 
 compares findings against the existing OPA guardrail rule set. When coverage 
-gaps are detected it drafts new or updated `.rego` rules, opens a PR, and 
-reports a summary back to the Benchmark Agent hub.
+gaps are detected it flags them for manual review, files a GitHub Issue (not 
+a PR — see note below), and reports a summary back to the Benchmark Agent hub.
+
+> **Current implementation note:** GitHub Enterprise Cloud policy prevents
+> Actions from opening PRs directly, and the current implementation
+> (`scripts/research_agent.py`) does not autonomously draft `.rego` rule
+> text — every confirmed gap is logged as `NEEDS_MANUAL_REVIEW` with the
+> rule assignment left `TBD` for a human to draft. Sections below describing
+> "Policy Drafting" and "PR Creation" reflect the target design; today those
+> steps are performed by a human after reading the filed Issue.
 
 ---
 
@@ -211,9 +219,9 @@ relevant developers.
 
 | Trigger | How activated | Scope |
 |---|---|---|
-| `scheduled` | Weekly GitHub Actions cron (`0 2 * * 1` — Monday 02:00 UTC) | Full scan of all sources |
+| `scheduled` | Weekly GitHub Actions cron (`0 8 * * 1` — Monday 08:00 UTC, per `.github/workflows/research-agent.yml`) | Full scan of all sources |
 | `on_demand` | Manual `workflow_dispatch` or direct agent session invocation | Full scan of all sources |
-| `pr_open` | PR touches any file under `policies/opa/` or `policies/pi/` | Targeted scan: checks only threats relevant to files changed in the PR |
+| `pr_open` | *(not yet implemented — `research-agent.yml` currently defines only `schedule` and `workflow_dispatch` triggers)* | Targeted scan: checks only threats relevant to files changed in the PR |
 
 ---
 
@@ -281,7 +289,7 @@ Field requirements by trigger:
   "gaps_found": "<integer>",
   "rules_drafted": "<integer>",
   "rules_updated": "<integer>",
-  "pr_url": "<github-pr-url | null>",
+  "issue_url": "<github-issue-url | null>",
   "log_entry": "policies/research/update-log.md#<anchor>",
   "violations": [
     {

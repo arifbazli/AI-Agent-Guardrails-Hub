@@ -115,8 +115,15 @@ When the Guardrail Enforcement Agent cannot be reached:
 
 1. Inform the developer that the Guardrail Agent is currently unavailable.
 2. Advise manual policy review using [`docs/policy-guide.md`](../../docs/policy-guide.md).
-3. Do **not** block the PR automatically — the developer may proceed at their
-   own risk pending a manual review.
+3. **Fail-open exception (does not apply to CRITICAL-class rules):** for a PR
+   that does not touch `policies/`, `.github/workflows/`, or secret-bearing
+   fields, the developer may proceed at their own risk pending a manual
+   review. For any PR touching those paths, or implicating a rule that
+   `docs/violation-remediation.md` documents as permitting **no exceptions**
+   (e.g. PG-002, CS-001/002, CC-001/002, PI-001/002/004/005), do **not**
+   allow merge until a human reviewer has manually confirmed compliance —
+   treat the outage itself as a required manual-review trigger for that PR,
+   not a reason to skip review.
 4. Log the unavailability event for audit purposes.
 
 ---

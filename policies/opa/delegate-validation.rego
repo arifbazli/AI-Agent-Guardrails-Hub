@@ -47,7 +47,7 @@ violation contains msg if {
 violation contains msg if {
     delegate := input.delegates[_]
     delegate.status == "ENABLED"
-    delegate.connected == false
+    not delegate.connected
     msg := {
         "rule":     "DV-001",
         "severity": "CRITICAL",
@@ -80,7 +80,9 @@ violation contains msg if {
 
 delegate_version(delegate) := delegate.spec.version if {
     delegate.spec.version
-} else := delegate.version
+} else := delegate.version if {
+    delegate.version
+} else := "UNKNOWN"
 
 # ---------------------------------------------------------------------------
 # RULE: DV-003 — Delegates must carry org-approved tag
@@ -189,12 +191,13 @@ valid_scopes := {"ACCOUNT", "ORG", "PROJECT"}
 
 violation contains msg if {
     delegate := input.delegates[_]
-    not delegate.scope.type in valid_scopes
+    scope_type := object.get(delegate, ["scope", "type"], "MISSING")
+    not scope_type in valid_scopes
     msg := {
         "rule":     "DV-006",
         "severity": "MEDIUM",
         "delegate": delegate.name,
-        "issue":    sprintf("Delegate '%v' does not have a valid scope assignment (current: '%v').", [delegate.name, delegate.scope.type]),
+        "issue":    sprintf("Delegate '%v' does not have a valid scope assignment (current: '%v').", [delegate.name, scope_type]),
         "fix":      sprintf("Assign the delegate to a valid scope: one of %v. Update the delegate configuration and redeploy.", [valid_scopes]),
     }
 }

@@ -50,6 +50,16 @@ test_dv001_violation_delegate_enabled_but_not_connected {
     count([v | v := result[_]; v.rule == "DV-001"]) > 0
 }
 
+test_dv001_violation_connected_field_entirely_missing {
+    # delegate.connected == false previously missed a delegate that omits
+    # the field entirely (undefined, not false) — must still fail closed.
+    result := validation.violation with input as {
+        "delegates": [{"name": "prod-eu-west-delegate-01", "status": "ENABLED"}],
+        "policy": {"approved_delegate_versions": []},
+    }
+    count([v | v := result[_]; v.rule == "DV-001"]) > 0
+}
+
 test_dv001_pass_delegate_enabled_and_connected {
     result := validation.violation with input as {
         "delegates": [{
@@ -124,6 +134,26 @@ test_dv002_pass_spec_version_field_takes_precedence {
         "policy": {"approved_delegate_versions": ["24.01.81202"]},
     }
     count([v | v := result[_]; v.rule == "DV-002"]) == 0
+}
+
+test_dv002_violation_both_version_fields_missing {
+    # delegate_version() previously fell through to an undefined
+    # delegate.version when spec.version was also absent, silently dropping
+    # the DV-002 violation instead of flagging an unknown version.
+    result := validation.violation with input as {
+        "delegates": [{
+            "name": "prod-eu-west-delegate-01",
+            "status": "ENABLED",
+            "connected": true,
+            "tags": ["org-approved", "owner:platform-team", "cost-centre:CC-001"],
+            "security_context": {"run_as_user": 1000, "privileged": false},
+            "spec": {"runAsRoot": false},
+            "resources": {"limits": {"cpu": "1", "memory": "2Gi"}},
+            "scope": {"type": "ORG"},
+        }],
+        "policy": {"approved_delegate_versions": ["24.01.81202"]},
+    }
+    count([v | v := result[_]; v.rule == "DV-002"]) > 0
 }
 
 # ---------------------------------------------------------------------------
@@ -334,6 +364,25 @@ test_dv006_violation_project_scope_missing_project_identifier {
             "spec": {"runAsRoot": false},
             "resources": {"limits": {"cpu": "1", "memory": "2Gi"}},
             "scope": {"type": "PROJECT"},
+        }],
+        "policy": {"approved_delegate_versions": ["24.01.81202"]},
+    }
+    count([v | v := result[_]; v.rule == "DV-006"]) > 0
+}
+
+test_dv006_violation_scope_entirely_missing {
+    # not delegate.scope.type in valid_scopes previously went undefined (no
+    # violation) when scope was absent entirely, not just an invalid type.
+    result := validation.violation with input as {
+        "delegates": [{
+            "name": "prod-eu-west-delegate-01",
+            "status": "ENABLED",
+            "connected": true,
+            "version": "24.01.81202",
+            "tags": ["org-approved", "owner:platform-team", "cost-centre:CC-001"],
+            "security_context": {"run_as_user": 1000, "privileged": false},
+            "spec": {"runAsRoot": false},
+            "resources": {"limits": {"cpu": "1", "memory": "2Gi"}},
         }],
         "policy": {"approved_delegate_versions": ["24.01.81202"]},
     }

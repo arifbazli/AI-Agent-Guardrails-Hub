@@ -232,6 +232,22 @@ violation contains msg if {
     }
 }
 
+# PG-005 recognises both the nested infra path and this flat path as valid
+# delegate selector locations (see has_delegate_selector) — PG-006 must check
+# both too, or a wildcard set via the flat schema goes undetected.
+violation contains msg if {
+    stage := input.pipeline.stages[_]
+    selector := stage.spec.delegateSelectors[_]
+    selector == "*"
+    msg := {
+        "rule":     "PG-006",
+        "severity": "HIGH",
+        "stage":    stage.name,
+        "issue":    sprintf("Deployment stage '%v' uses a wildcard ('*') delegate selector.", [stage.name]),
+        "fix":      "Replace the wildcard selector with a specific delegate tag (e.g. 'prod-delegate', 'eu-west-delegate').",
+    }
+}
+
 # ---------------------------------------------------------------------------
 # RULE: PG-007 — Rollback strategy required for production deployments
 # Severity: HIGH

@@ -289,7 +289,13 @@ def gap_analysis(items: list[dict]) -> dict:
             fpath = os.path.join(root, fname)
             with open(fpath) as rf:
                 content = rf.read()
-            for m in re.finditer(r"# Rule:\s*(\S+)", content):
+            # Actual rule headers in this repo use "# RULE:" (all caps, see
+            # e.g. pipeline-guardrails.rego) — this was previously matching
+            # the literal, differently-cased "# Rule:" and finding zero rule
+            # IDs in any real policy file, making existing_rules always empty
+            # and every fetched CVE/KEV item register as a gap regardless of
+            # actual coverage.
+            for m in re.finditer(r"#\s*RULE:\s*(\S+)", content, re.IGNORECASE):
                 rule_id = m.group(1)
                 existing_rules[rule_id] = {
                     "file":             fpath,

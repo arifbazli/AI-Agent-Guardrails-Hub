@@ -50,11 +50,15 @@ jobs:
             NAME=$(echo "$label" | cut -d'|' -f1)
             COLOR=$(echo "$label" | cut -d'|' -f2)
             DESC=$(echo "$label" | cut -d'|' -f3)
-            gh label create "$NAME" \
+            if gh label create "$NAME" \
+              --repo "${GITHUB_REPOSITORY}" \
               --color "$COLOR" \
               --description "$DESC" \
-              --force 2>/dev/null || true
-            echo "✅ $NAME"
+              --force; then
+              echo "✅ $NAME created/updated"
+            else
+              echo "⚠️  $NAME failed — see error above"
+            fi
           done
           echo "All labels verified" > $GITHUB_STEP_SUMMARY
 
@@ -89,24 +93,28 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install pyyaml requests \
-            --break-system-packages
+          python3 -m venv /tmp/loop-engine-venv
+          echo "/tmp/loop-engine-venv/bin" >> "$GITHUB_PATH"
+          /tmp/loop-engine-venv/bin/pip install --quiet pyyaml requests
 
       - name: Run Harness OPA evaluation
         id: harness_eval
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           python3 scripts/loop_engine.py \
             --pipeline harness \
             --max-attempts 3 \
             --auto-fix true \
-            --pr-branch "${{ github.head_ref }}" \
+            --pr-branch "$HEAD_REF" \
             --pr-number "${{ github.event.pull_request.number }}"
         continue-on-error: true
 
       - name: Commit Harness auto-fixes
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           git add -A
           if git diff --staged --quiet; then
@@ -116,15 +124,16 @@ jobs:
           git commit -m \
             "[Loop Engine] Harness auto-fix — $(date +%Y-%m-%d)"
           for i in 1 2 3; do
-            if git pull --rebase origin \
-                ${{ github.head_ref }} && \
-               git push origin \
-                HEAD:${{ github.head_ref }}; then
-              break
+            if git pull --rebase origin "$HEAD_REF" && \
+               git push origin HEAD:"$HEAD_REF"; then
+              echo "Push succeeded on attempt $i"
+              exit 0
             fi
             echo "Push attempt $i failed, retrying..."
             sleep 5
           done
+          echo "::error::Failed to push Harness auto-fix commit after 3 attempts"
+          exit 1
 
       - name: Post Harness compliance report
         env:
@@ -140,6 +149,7 @@ jobs:
         if: steps.harness_eval.outcome == 'failure'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           gh issue create \
             --title "🚨 Loop Engine: Harness escalation — PR #${{ github.event.pull_request.number }}" \
@@ -147,7 +157,7 @@ jobs:
 
           Pipeline: Harness OPA
           PR: ${{ github.event.pull_request.html_url }}
-          Branch: ${{ github.head_ref }}
+          Branch: $HEAD_REF
           Date: $(date)
 
           Auto-fix failed after 3 attempts.
@@ -185,11 +195,15 @@ jobs:
             NAME=$(echo "$label" | cut -d'|' -f1)
             COLOR=$(echo "$label" | cut -d'|' -f2)
             DESC=$(echo "$label" | cut -d'|' -f3)
-            gh label create "$NAME" \
+            if gh label create "$NAME" \
+              --repo "${GITHUB_REPOSITORY}" \
               --color "$COLOR" \
               --description "$DESC" \
-              --force 2>/dev/null || true
-            echo "✅ $NAME"
+              --force; then
+              echo "✅ $NAME created/updated"
+            else
+              echo "⚠️  $NAME failed — see error above"
+            fi
           done
           echo "All labels verified" > $GITHUB_STEP_SUMMARY
 
@@ -224,24 +238,28 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install pyyaml requests autopep8 \
-            --break-system-packages
+          python3 -m venv /tmp/loop-engine-venv
+          echo "/tmp/loop-engine-venv/bin" >> "$GITHUB_PATH"
+          /tmp/loop-engine-venv/bin/pip install --quiet pyyaml requests autopep8
 
       - name: Run Pi evaluation
         id: pi_eval
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           python3 scripts/loop_engine.py \
             --pipeline pi \
             --max-attempts 3 \
             --auto-fix true \
-            --pr-branch "${{ github.head_ref }}" \
+            --pr-branch "$HEAD_REF" \
             --pr-number "${{ github.event.pull_request.number }}"
         continue-on-error: true
 
       - name: Commit Pi auto-fixes
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           git add -A
           if git diff --staged --quiet; then
@@ -251,15 +269,16 @@ jobs:
           git commit -m \
             "[Loop Engine] Pi auto-fix — $(date +%Y-%m-%d)"
           for i in 1 2 3; do
-            if git pull --rebase origin \
-                ${{ github.head_ref }} && \
-               git push origin \
-                HEAD:${{ github.head_ref }}; then
-              break
+            if git pull --rebase origin "$HEAD_REF" && \
+               git push origin HEAD:"$HEAD_REF"; then
+              echo "Push succeeded on attempt $i"
+              exit 0
             fi
             echo "Push attempt $i failed, retrying..."
             sleep 5
           done
+          echo "::error::Failed to push Pi auto-fix commit after 3 attempts"
+          exit 1
 
       - name: Post Pi compliance report
         env:
@@ -275,6 +294,7 @@ jobs:
         if: steps.pi_eval.outcome == 'failure'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           gh issue create \
             --title "🚨 Loop Engine: Pi escalation — PR #${{ github.event.pull_request.number }}" \
@@ -282,7 +302,7 @@ jobs:
 
           Pipeline: Pi Workflow
           PR: ${{ github.event.pull_request.html_url }}
-          Branch: ${{ github.head_ref }}
+          Branch: $HEAD_REF
           Date: $(date)
 
           Auto-fix failed after 3 attempts.
@@ -320,11 +340,15 @@ jobs:
             NAME=$(echo "$label" | cut -d'|' -f1)
             COLOR=$(echo "$label" | cut -d'|' -f2)
             DESC=$(echo "$label" | cut -d'|' -f3)
-            gh label create "$NAME" \
+            if gh label create "$NAME" \
+              --repo "${GITHUB_REPOSITORY}" \
               --color "$COLOR" \
               --description "$DESC" \
-              --force 2>/dev/null || true
-            echo "✅ $NAME"
+              --force; then
+              echo "✅ $NAME created/updated"
+            else
+              echo "⚠️  $NAME failed — see error above"
+            fi
           done
           echo "All labels verified" > $GITHUB_STEP_SUMMARY
 
@@ -359,24 +383,28 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install pyyaml requests \
-            --break-system-packages
+          python3 -m venv /tmp/loop-engine-venv
+          echo "/tmp/loop-engine-venv/bin" >> "$GITHUB_PATH"
+          /tmp/loop-engine-venv/bin/pip install --quiet pyyaml requests
 
       - name: Validate research proposals
         id: research_eval
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           python3 scripts/loop_engine.py \
             --pipeline research \
             --max-attempts 3 \
             --auto-fix true \
-            --pr-branch "${{ github.head_ref }}" \
+            --pr-branch "$HEAD_REF" \
             --pr-number "${{ github.event.pull_request.number }}"
         continue-on-error: true
 
       - name: Commit research fixes
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           git add -A
           if git diff --staged --quiet; then
@@ -386,15 +414,16 @@ jobs:
           git commit -m \
             "[Loop Engine] Research auto-fix — $(date +%Y-%m-%d)"
           for i in 1 2 3; do
-            if git pull --rebase origin \
-                ${{ github.head_ref }} && \
-               git push origin \
-                HEAD:${{ github.head_ref }}; then
-              break
+            if git pull --rebase origin "$HEAD_REF" && \
+               git push origin HEAD:"$HEAD_REF"; then
+              echo "Push succeeded on attempt $i"
+              exit 0
             fi
             echo "Push attempt $i failed, retrying..."
             sleep 5
           done
+          echo "::error::Failed to push Research auto-fix commit after 3 attempts"
+          exit 1
 
   # --------------------------------------------------------------------------
   # Loop Engine Summary
@@ -421,11 +450,15 @@ jobs:
             NAME=$(echo "$label" | cut -d'|' -f1)
             COLOR=$(echo "$label" | cut -d'|' -f2)
             DESC=$(echo "$label" | cut -d'|' -f3)
-            gh label create "$NAME" \
+            if gh label create "$NAME" \
+              --repo "${GITHUB_REPOSITORY}" \
               --color "$COLOR" \
               --description "$DESC" \
-              --force 2>/dev/null || true
-            echo "✅ $NAME"
+              --force; then
+              echo "✅ $NAME created/updated"
+            else
+              echo "⚠️  $NAME failed — see error above"
+            fi
           done
           echo "All labels verified" > $GITHUB_STEP_SUMMARY
 

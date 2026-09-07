@@ -251,6 +251,12 @@ jobs:
           echo "✅ Issue created: $ISSUE_URL" > $GITHUB_STEP_SUMMARY
           echo "Branch: ${BRANCH}" >> $GITHUB_STEP_SUMMARY
 
+      # Pushes directly to the checked-out default branch, unlike the
+      # gaps>0 path above (which uses a branch + issue). This is intentional,
+      # not an oversight: GHE policy blocks Actions from opening PRs either
+      # way, so a branch here would just be an orphan nothing ever merges,
+      # and the only content changed is the audit log itself (update-log.md /
+      # current-scan-summary.md) — no pipeline or policy YAML.
       - name: Commit log update (no gaps — no PR needed)
         if: steps.gap_analysis.outputs.gaps_count == '0'
         run: |

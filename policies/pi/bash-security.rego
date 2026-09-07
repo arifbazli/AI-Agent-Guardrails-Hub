@@ -54,6 +54,22 @@ blocked_bash_patterns := [
     `(?i)subprocess\.run\s*\(.*shell\s*=\s*True`,
 ]
 
+# Shell metacharacters that enable command chaining, substitution, or
+# redirection (e.g. "echo ok && rm -rf /"). command_is_approved below matches
+# on a prefix (startswith), so it cannot see past one of these — any command
+# containing one is blocked unconditionally, regardless of whitelist status.
+shell_metacharacter_patterns := [
+    `;`,
+    `&&`,
+    `\|\|`,
+    `\|`,
+    "`",
+    `\$\(`,
+    `>`,
+    `<`,
+    `\n`,
+]
+
 # ---------------------------------------------------------------------------
 # RULE: PI-001 — Pi agent bash security level must be L4 or L5 minimum
 # Severity: CRITICAL
@@ -62,7 +78,7 @@ blocked_bash_patterns := [
 # ---------------------------------------------------------------------------
 
 violation contains msg if {
-    level := input.pi_agent.bash_security_level
+    level := object.get(input, ["pi_agent", "bash_security_level"], "MISSING")
     not level in {"L4", "L5"}
     msg := {
         "rule":     "PI-001",
@@ -128,6 +144,19 @@ violation contains msg if {
     }
 }
 
+violation contains msg if {
+    cmd := input.pi_agent.bash_commands[_]
+    command_has_metacharacters(cmd)
+    msg := {
+        "rule":     "PI-003",
+        "severity": "HIGH",
+        "command":  cmd,
+        "issue":    sprintf("Pi agent bash command '%v' contains shell metacharacters (chaining, substitution, or redirection), which can smuggle an unapproved command past the whitelist and blocklist checks.", [cmd]),
+        "fix":      "Remove shell metacharacters (; && || | ` $() > < newline) from the command. Each bash_commands entry must be a single, simple invocation with no chaining.",
+        "docs":     "docs/violation-remediation.md#pi-003",
+    }
+}
+
 # ---------------------------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------------------------
@@ -144,6 +173,11 @@ command_is_approved(cmd) if {
 
 command_is_blocked(cmd) if {
     pattern := blocked_bash_patterns[_]
+    regex.match(pattern, cmd)
+}
+
+command_has_metacharacters(cmd) if {
+    pattern := shell_metacharacter_patterns[_]
     regex.match(pattern, cmd)
 }
 
