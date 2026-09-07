@@ -15,7 +15,7 @@ Diagrams: [architecture](docs/assets/architecture.svg) ·
 | `.github/workflows/` | Loop Engine (per-PR) · Research Agent (weekly) · Health Check (12h) |
 | `policies/opa/`, `policies/pi/` | Rego policies + tests (see below) |
 | `policies/pipeline/` | Harness-native approval/stage-gate config |
-| `test-inputs/` | Sample Harness pipeline YAML + `pi-agent-activity.yaml` (Pi agent activity schema/fixture) |
+| `test-inputs/` | Sample pipeline YAML + the Pi-agent activity fixture (`pi-agent-activity.yaml`) |
 | `scripts/` | `loop_engine.py` · `research_agent.py` · `scan_health_check.py` |
 | `docs/` | Policy-writing guide, per-rule remediation, maintenance runbook |
 
@@ -33,10 +33,6 @@ Diagrams: [architecture](docs/assets/architecture.svg) ·
 | `research-proposals.rego` | RRP-001–031 (draft) | Threat-driven proposals awaiting review |
 
 Retry budget on FAIL: **CRITICAL/HIGH** = 3 attempts · **MEDIUM** = 1 · **LOW** = advisory only.
-
-The Pi loop evaluates a real `pi-agent-activity.yaml` (schema in
-[`pi-guardrail-agent.md`](.github/agents/pi-guardrail-agent.md)) when a PR
-includes one, falling back to the checked-in fixture otherwise.
 
 ## Quick start
 
