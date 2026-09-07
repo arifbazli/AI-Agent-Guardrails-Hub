@@ -146,16 +146,6 @@ jobs:
             echo "⚠️ Some APIs unreachable after retries (${FAILING}) — research scan may be incomplete" >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Load existing rule baseline
-        id: load_rules
-        run: |
-          echo "Loading existing OPA rules from policies/opa/ and policies/pi/"
-          # Extract rule IDs from .rego files for baseline tracking
-          rule_ids=$(grep -rh '# Rule:' policies/opa/ policies/pi/ \
-            | sed 's/.*# Rule: //' | sort | tr '\n' ',')
-          echo "existing_rules=${rule_ids%,}" >> "$GITHUB_OUTPUT"
-          echo "Existing rules found: ${rule_ids}"
-
       - name: Run research scan
         id: gap_analysis
         env:
@@ -173,25 +163,35 @@ jobs:
             opa check "$f" && echo "OK: $f" || echo "FAIL: $f"
           done
 
-      - name: Create research summary issue
+      # Always commit the log directly to the default branch. There is no
+      # rule-drafting in this implementation (see research-agent.md's
+      # implementation note) — every run only changes update-log.md /
+      # current-scan-summary.md, never policies/opa/research-proposals.rego.
+      # Gating a log-only change behind a branch + "open a PR manually" step
+      # (the previous design) produced 9 orphaned research/auto-* branches
+      # that nobody ever merged, because there was never anything in them to
+      # review. If real rule-drafting is added later, gate THAT specific
+      # change behind a branch/PR — not the audit log.
+      - name: Commit scan log update
+        run: |
+          git config user.name  "Research Agent"
+          git config user.email "research-agent@github-actions.bot"
+          git add policies/research/update-log.md policies/research/current-scan-summary.md
+          git diff --cached --quiet || \
+            git commit -m "[Research Agent] Scan — $(date +%Y-%m-%d): ${{ steps.gap_analysis.outputs.gaps_count }} new gap(s), ${{ steps.gap_analysis.outputs.recurring_count }} recurring unresolved"
+          git push origin HEAD
+
+      # Only fires for NEW gaps (gap_analysis.py de-dupes against every gap
+      # already logged in a previous run) — a still-open recurring gap no
+      # longer files a fresh issue every single week it stays unresolved.
+      - name: Create research summary issue for new gaps
         id: create_issue
         if: steps.gap_analysis.outputs.gaps_count != '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GAPS_COUNT: ${{ steps.gap_analysis.outputs.gaps_count }}
-          RUN_DATE: ${{ github.run_id }}
+          RECURRING_COUNT: ${{ steps.gap_analysis.outputs.recurring_count }}
         run: |
-          BRANCH="research/auto-$(date +%Y-%m-%d)-${RUN_DATE}"
-          git config user.name  "Research Agent"
-          git config user.email "research-agent@github-actions.bot"
-          git checkout -b "${BRANCH}"
-          git add policies/research/update-log.md policies/research/current-scan-summary.md
-          git commit -m "[Research Agent] Policy gap scan — $(date +%Y-%m-%d)
-
-          Gaps found: ${GAPS_COUNT}
-          See policies/research/update-log.md for details."
-          git push origin "${BRANCH}"
-
           # Read scan results — use current-scan-summary.md (current run only)
           # to avoid matching stale "Gaps found:" values from prior log entries.
           if [ -f "policies/research/current-scan-summary.md" ]; then
@@ -199,26 +199,16 @@ jobs:
           elif [ -f "policies/research/update-log.md" ]; then
             SUMMARY=$(tail -60 policies/research/update-log.md)
           else
-            SUMMARY="See branch for details"
-          fi
-
-          # Count proposed rules — fixed to avoid grep -c double-output:
-          # grep -c exits 1 on 0 matches (printing "0"), which previously
-          # triggered "|| echo 0" and produced RULE_COUNT="0\n0".
-          RULE_COUNT=0
-          if [ -f "policies/opa/research-proposals.rego" ]; then
-            n=$(grep -cE "^(violation|warn|deny)\[" \
-              policies/opa/research-proposals.rego 2>/dev/null) \
-              && RULE_COUNT=$n || true
+            SUMMARY="See policies/research/update-log.md for details"
           fi
 
           ISSUE_URL=$(gh issue create \
-            --title "🔬 Research Agent Scan — $(date +%Y-%m-%d)" \
+            --title "🔬 Research Agent — ${GAPS_COUNT} new gap(s) — $(date +%Y-%m-%d)" \
             --body "## Research Agent — Policy Intelligence Scan
 
           **Date:** $(date)
-          **Branch:** \`${BRANCH}\`
-          **New rules proposed:** $RULE_COUNT
+          **New gaps:** ${GAPS_COUNT}
+          **Recurring unresolved gaps:** ${RECURRING_COUNT}
 
           ## Scan Results
           \`\`\`
@@ -226,22 +216,15 @@ jobs:
           \`\`\`
 
           ## Action Required
-          1. Review the branch: \`${BRANCH}\`
-          2. Check proposed rules:
-             \`policies/opa/research-proposals.rego\`
-          3. If rules look good, open a PR manually:
-             - Base: main
-             - Compare: ${BRANCH}
-          4. Close this issue when merged or dismissed
+          1. Review the new gaps above. Full audit trail: \`policies/research/update-log.md\`.
+          2. For each, either draft a \`.rego\` rule + \`_test.rego\` and open a PR,
+             or note in the log why no rule is needed.
+          3. Close this issue once triaged — it will not recur. Recurring
+             unresolved gaps stay visible in the log without filing a new
+             issue every week.
 
-          ## Files Changed
-          - \`policies/research/update-log.md\`
-          - \`policies/opa/research-proposals.rego\`
-
-          > This issue was auto-created by the
-          > Research Agent because GitHub Enterprise
-          > Cloud policy prevents Actions from
-          > opening PRs directly." \
+          > This issue was auto-created by the Research Agent because GitHub
+          > Enterprise Cloud policy prevents Actions from opening PRs directly." \
             --label "research-proposal" \
             --label "needs-human-review")
 
@@ -249,23 +232,6 @@ jobs:
           echo "issue_url=${ISSUE_URL}" >> "$GITHUB_OUTPUT"
           echo "issue_number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "✅ Issue created: $ISSUE_URL" > $GITHUB_STEP_SUMMARY
-          echo "Branch: ${BRANCH}" >> $GITHUB_STEP_SUMMARY
-
-      # Pushes directly to the checked-out default branch, unlike the
-      # gaps>0 path above (which uses a branch + issue). This is intentional,
-      # not an oversight: GHE policy blocks Actions from opening PRs either
-      # way, so a branch here would just be an orphan nothing ever merges,
-      # and the only content changed is the audit log itself (update-log.md /
-      # current-scan-summary.md) — no pipeline or policy YAML.
-      - name: Commit log update (no gaps — no PR needed)
-        if: steps.gap_analysis.outputs.gaps_count == '0'
-        run: |
-          git config user.name  "Research Agent"
-          git config user.email "research-agent@github-actions.bot"
-          git add policies/research/update-log.md policies/research/current-scan-summary.md
-          git diff --cached --quiet || \
-            git commit -m "[Research Agent] No-op scan — $(date +%Y-%m-%d): 0 gaps found"
-          git push origin HEAD
 
       - name: Output summary
         run: |
@@ -274,7 +240,8 @@ jobs:
           echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Trigger | ${{ steps.trigger.outputs.trigger }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Gaps found | ${{ steps.gap_analysis.outputs.gaps_count }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| New gaps | ${{ steps.gap_analysis.outputs.gaps_count }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Recurring unresolved | ${{ steps.gap_analysis.outputs.recurring_count }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Covered | ${{ steps.gap_analysis.outputs.covered_count }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Log | \`policies/research/update-log.md\` |" >> "$GITHUB_STEP_SUMMARY"
 

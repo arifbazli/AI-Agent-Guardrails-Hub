@@ -279,8 +279,32 @@ def fetch_cisa() -> list[dict]:
 # Gap analysis
 # ---------------------------------------------------------------------------
 
-def gap_analysis(items: list[dict]) -> dict:
-    """Compare threat items against existing OPA rules and identify gaps."""
+def _load_previously_reported_gap_ids() -> set[str]:
+    """CVE/KEV IDs already logged as a gap in a previous run.
+
+    Without this, an unresolved gap gets treated as "new" and re-escalated
+    (fresh Issue) every single week it remains open — confirmed in practice:
+    CVE-2026-63808, CVE-2026-64102, and ~20 others recurred, unresolved,
+    across all six research-agent Issues filed to date.
+    """
+    log_path = Path("policies/research/update-log.md")
+    if not log_path.exists():
+        return set()
+    content = log_path.read_text()
+    return set(re.findall(r"\|\s*GAP-\d+\s*\|\s*(\S+)\s*\|", content))
+
+
+def gap_analysis(items: list[dict], previously_reported: set[str] | None = None) -> dict:
+    """Compare threat items against existing OPA rules and identify gaps.
+
+    De-dupes items matched by more than one search keyword within this run
+    (the same CVE fetched under, say, both "Docker" and "supply chain"
+    previously produced two separate GAP-* rows for one real threat).
+    Gaps already reported in a previous run are split out as `recurring`
+    rather than counted as `gaps`, so an unresolved item doesn't keep
+    re-triggering a fresh escalation Issue every week it stays open.
+    """
+    previously_reported = previously_reported or set()
     existing_rules: dict[str, dict] = {}
     for root, _dirs, files in os.walk("policies"):
         for fname in files:
@@ -305,10 +329,16 @@ def gap_analysis(items: list[dict]) -> dict:
     print(f"Existing rules loaded: {len(existing_rules)}")
     print(f"Threat items to evaluate: {len(items)}")
 
-    gaps: list[dict]    = []
-    covered: list[dict] = []
+    gaps: list[dict]      = []
+    recurring: list[dict] = []
+    covered: list[dict]   = []
+    seen_ids: set[str] = set()
     for item in items:
-        item_id      = item["id"]
+        item_id = item["id"]
+        if item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
+
         product_hint = item.get("keyword", item.get("product", "")).lower()
         matched      = False
         for rule_id, rule_info in existing_rules.items():
@@ -317,19 +347,35 @@ def gap_analysis(items: list[dict]) -> dict:
                 covered.append({"item": item_id, "rule": rule_id})
                 matched = True
                 break
-        if not matched:
+        if matched:
+            continue
+        if item_id in previously_reported:
+            recurring.append(item)
+        else:
             gaps.append(item)
 
-    print(f"Covered: {len(covered)}, Gaps: {len(gaps)}")
-    return {"gaps": gaps, "covered": covered}
+    print(f"Covered: {len(covered)}, New gaps: {len(gaps)}, Recurring unresolved: {len(recurring)}")
+    return {"gaps": gaps, "recurring": recurring, "covered": covered}
 
 
 # ---------------------------------------------------------------------------
 # Update research log
 # ---------------------------------------------------------------------------
 
+def _gap_rows(items: list[dict], prefix: str) -> str:
+    rows = ""
+    for i, g in enumerate(items, 1):
+        desc = g.get("description", "").replace("|", "/").replace("\n", " ").strip() or "(no description)"
+        rows += (
+            f"| {prefix}-{i:03d} | {g['id']} | {g.get('severity', 'MEDIUM')} "
+            f"| TBD | NEEDS_MANUAL_REVIEW | {desc} |\n"
+        )
+    return rows
+
+
 def update_log(
     gaps: list[dict],
+    recurring: list[dict],
     covered: list[dict],
     nvd_count: int,
     cisa_count: int,
@@ -345,14 +391,18 @@ def update_log(
     """
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    gap_rows = ""
-    for i, g in enumerate(gaps, 1):
-        gap_rows += (
-            f"| GAP-{i:03d} | {g['id']} | {g.get('severity', 'MEDIUM')} "
-            f"| TBD | NEEDS_MANUAL_REVIEW |\n"
-        )
+    gap_rows = _gap_rows(gaps, "GAP")
     if not gap_rows:
-        gap_rows = "_No gaps found in this run._\n"
+        gap_rows = "_No new gaps found in this run._\n"
+
+    recurring_section = ""
+    if recurring:
+        recurring_section = (
+            f"\n### Recurring unresolved gaps (first reported in an earlier run): {len(recurring)}\n"
+            f"| Gap ID | Source | Severity | Assigned Rule | Status | Description |\n"
+            f"|---|---|---|---|---|---|\n"
+            f"{_gap_rows(recurring, 'REC')}\n"
+        )
 
     entry = (
         f"\n## Run: {now} — Trigger: {trigger}\n\n"
@@ -361,10 +411,11 @@ def update_log(
         f"- OWASP: manual monitoring (automated fetch not yet implemented)\n"
         f"- CISA KEV: {cisa_count} items reviewed\n"
         f"- Harness release notes: manual monitoring (automated fetch not yet implemented)\n\n"
-        f"### Gaps found: {len(gaps)}\n"
-        f"| Gap ID | Source | Severity | Assigned Rule | Status |\n"
-        f"|---|---|---|---|---|\n"
+        f"### Gaps found (new this run): {len(gaps)}\n"
+        f"| Gap ID | Source | Severity | Assigned Rule | Status | Description |\n"
+        f"|---|---|---|---|---|---|\n"
         f"{gap_rows}\n"
+        f"{recurring_section}"
         f"### Rules updated: 0\n"
         f"No automated rule drafting performed in this run — gaps flagged for manual review.\n\n"
         f"### No-action items: {len(covered)}\n"
@@ -444,29 +495,34 @@ def main() -> int:
     cisa_items = fetch_cisa()
     all_items  = nvd_items + cisa_items
 
-    analysis = gap_analysis(all_items)
-    gaps     = analysis["gaps"]
-    covered  = analysis["covered"]
+    analysis  = gap_analysis(all_items, previously_reported=_load_previously_reported_gap_ids())
+    gaps      = analysis["gaps"]
+    recurring = analysis["recurring"]
+    covered   = analysis["covered"]
 
     trigger = os.environ.get("RESEARCH_TRIGGER", "on_demand")
 
     if not args.dry_run:
         update_log(
             gaps      = gaps,
+            recurring = recurring,
             covered   = covered,
             nvd_count = len(nvd_items),
             cisa_count= len(cisa_items),
             trigger   = trigger,
         )
 
-    # Export counts for GitHub Actions downstream steps
+    # Export counts for GitHub Actions downstream steps. gaps_count is
+    # NEW gaps only — recurring (already-reported, still-open) items don't
+    # re-trigger the "open an Issue" step in research-agent.yml.
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:
         with open(github_output, "a") as fh:
             fh.write(f"gaps_count={len(gaps)}\n")
+            fh.write(f"recurring_count={len(recurring)}\n")
             fh.write(f"covered_count={len(covered)}\n")
 
-    print(f"\nScan complete — gaps: {len(gaps)}, covered: {len(covered)}")
+    print(f"\nScan complete — new gaps: {len(gaps)}, recurring: {len(recurring)}, covered: {len(covered)}")
     return 0
 
 
