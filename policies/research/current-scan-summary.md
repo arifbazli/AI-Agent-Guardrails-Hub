@@ -1,20 +1,44 @@
-## Run: 2026-06-22 — Trigger: scheduled
+## Run: 2026-08-31 — Trigger: scheduled
 
 ### Sources scanned
-- NVD: 20 items reviewed
+- NVD: 41 items reviewed
 - OWASP: manual monitoring (automated fetch not yet implemented)
-- CISA KEV: 2 items reviewed
+- CISA KEV: 4 items reviewed
 - Harness release notes: manual monitoring (automated fetch not yet implemented)
 
-### Gaps found: 0
+### Gaps found: 25
 | Gap ID | Source | Severity | Assigned Rule | Status |
 |---|---|---|---|---|
-_No gaps found in this run._
+| GAP-001 | CVE-2026-18830 | HIGH | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-002 | CVE-2026-72193 | LOW | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-003 | CVE-2026-64676 | MEDIUM | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-004 | CVE-2026-46409 | CRITICAL | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-005 | CVE-2026-50192 | LOW | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-006 | CVE-2026-46370 | MEDIUM | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-007 | CVE-2026-48168 | CRITICAL | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-008 | CVE-2026-64652 | LOW | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-009 | CVE-2026-11325 | HIGH | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-010 | CVE-2026-63187 | MEDIUM | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-011 | CVE-2026-55378 | LOW | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-012 | CVE-2026-64655 | LOW | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-013 | CVE-2026-19548 | MEDIUM | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-014 | CVE-2026-15423 | HIGH | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-015 | CVE-2026-71493 | LOW | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-016 | CVE-2026-71494 | LOW | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-017 | CVE-2026-64655 | LOW | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-018 | CVE-2026-50237 | HIGH | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-019 | CVE-2026-57858 | HIGH | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-020 | CVE-2026-19548 | MEDIUM | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-021 | CVE-2026-48702 | HIGH | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-022 | CVE-2026-8452 | HIGH | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-023 | CVE-2026-20349 | HIGH | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-024 | CVE-2026-68820 | HIGH | TBD | NEEDS_MANUAL_REVIEW |
+| GAP-025 | CVE-2026-63077 | HIGH | TBD | NEEDS_MANUAL_REVIEW |
 
 ### Rules updated: 0
 No automated rule drafting performed in this run — gaps flagged for manual review.
 
-### No-action items: 22
-22 threats fully covered by existing rules. No changes required.
+### No-action items: 20
+20 threats fully covered by existing rules. No changes required.
 
 ---
