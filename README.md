@@ -2,25 +2,33 @@
 
 **Policy-as-code guardrails for Harness CI/CD and Pi coding agents.**
 
+[![Policy CI](https://github.com/arifbazli/AI-Agent-Guardrails-Hub/actions/workflows/policy-ci.yml/badge.svg)](https://github.com/arifbazli/AI-Agent-Guardrails-Hub/actions/workflows/policy-ci.yml)
+![OPA](https://img.shields.io/badge/OPA-v0.68.0-7d9199?logo=openpolicyagent&logoColor=white)
+![Rules](https://img.shields.io/badge/rules-44_enforced_·_31_draft-0f766e)
+![Python](https://img.shields.io/badge/python-3.11+-3776ab?logo=python&logoColor=white)
+
 ![AI Agent Guardrails Hub flow](docs/assets/guardrails-flow.svg)
 
 ## Features
 
-- **Policy checks:** 44 OPA/Rego rules for pipelines, connectors, delegates, Bash, code, and workflow gates.
-- **Auto-fix loop:** Evaluates PRs, attempts fixes, and escalates unresolved issues.
-- **Threat research:** Weekly NVD and CISA KEV scans flag gaps for review.
-- **Health checks:** Validate policies and agent specifications every 12 hours.
+- **Policy CI:** `opa check`, 199 OPA tests and Loop Engine specs on every PR.
+- **Loop Engine:** Checks PR-changed pipeline YAML and Pi activity, auto-fixes, and escalates. Fails closed; never edits policies, fixtures or workflows.
+- **Threat research:** Weekly NVD and CISA KEV scans flag rule gaps for review.
+- **Health checks:** Validate policies and agent specs every 12 hours.
+
+## Roadmap
+
+Self-updating, multi-agent rule pipeline: **triage → draft → verify → review → warn-only → human promotion**. Only additions are automated; blocking rules always need human approval.
 
 ## Quick start
 
-Requires [OPA](https://www.openpolicyagent.org/) v0.68.0.
-
 ```bash
-opa test policies/opa/ policies/pi/ -v
+opa test policies/opa/ policies/pi/ -v      # OPA v0.68.0
+python3 -m unittest discover -s tests -v    # requires pyyaml
 ```
 
 > [!WARNING]
-> Reference automation—not a production security boundary. Workflows can commit auto-fixes to PR pipeline YAML and create issues. Review all fixes before merging.
+> Reference automation—not a production security boundary. Review all auto-fixes before merging.
 
 ## Contributing
 
