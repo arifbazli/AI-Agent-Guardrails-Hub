@@ -8,30 +8,18 @@ pipeline:
     - stage:
         name: deploy-production
         type: Deployment
-  timeout: 1h
         spec:
           environment:
             type: Production
           execution:
             steps:
               - step:
-                  name: approval-gate
-                  type: HarnessApproval
-                  spec: {}
-              - step:
-rollbackSteps:
-  - step:
-      type: HelmRollback
-      name: auto-rollback
-      spec: {}
-
                   name: deploy
                   type: Run
                   spec:
-                    image: gcr.io/deloitte-gcs/app:latest
+                    image: badregistry.io/app:latest
                     envVariables:
-                      SECRET: <+secrets.getValue("auto-migrated-secret")>  # AUTO-FIXED by Loop Engine
+                      SECRET: plaintext123
           infrastructure:
             spec:
-              delegateSelectors:
-              - org-approved
+              delegateSelectors: []
