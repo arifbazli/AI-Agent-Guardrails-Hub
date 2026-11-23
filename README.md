@@ -7,7 +7,7 @@
 ![Rules](https://img.shields.io/badge/rules-44_enforced_·_31_draft-0f766e)
 ![Python](https://img.shields.io/badge/python-3.11+-3776ab?logo=python&logoColor=white)
 
-![AI Agent Guardrails Hub flow](docs/assets/guardrails-flow.svg)
+![AI Agent Guardrails Hub flow](docs/assets/guardrails-flow-v2.svg)
 
 ## Features
 
