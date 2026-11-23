@@ -55,7 +55,7 @@ This is expected behaviour, not a bug.
    opa test policies/pi/ -v
    All 44 rules should pass. Investigate immediately if any fail.
 
-2. Review `loop-log.md` for recurring escalations.
+2. Review `loop-engine-escalation` issues for recurring escalations.
    Same rule failing repeatedly means the auto-fix logic for that
    rule needs improvement — see Section 6.
 
@@ -123,7 +123,7 @@ Also:
 
 ## 6. Improving the Auto-Fix Logic
 
-If loop-log.md shows the same rule escalating across multiple PRs:
+If `loop-engine-escalation` issues show the same rule escalating across multiple PRs:
 
 1. Find the _fix_* method matching the rule in scripts/loop_engine.py
    (for example _fix_registry for PG-003).
@@ -147,7 +147,7 @@ If loop-log.md shows the same rule escalating across multiple PRs:
    rule needs at least one PASS and one FAIL test case.
 4. Document the rule in docs/violation-remediation.md with an anchor
    link.
-5. Add a row to the rule table in README.md.
+5. Update the rule count in README.md if it changed.
 6. Open a PR. Loop Engine validates automatically; Guardrail
    Enforcement Agent reviews for compliance.
 7. Merge once green.
@@ -158,7 +158,7 @@ If loop-log.md shows the same rule escalating across multiple PRs:
 
 | File | Purpose |
 |---|---|
-| policies/research/loop-log.md | History of every Loop Engine attempt |
+| policies/research/loop-log.md | Historical Loop Engine attempts (PR runs now report in PR comments and Actions logs; the log is not committed) |
 | policies/research/update-log.md | History of every Research Agent scan |
 | docs/violation-remediation.md | Fix guidance for every rule, by ID |
 | docs/policy-guide.md | How to write a new OPA rule correctly |
@@ -188,7 +188,7 @@ WEEKLY (Monday, 5 min)
 MONTHLY (30 min)
 - opa test policies/opa/ -v
 - opa test policies/pi/ -v
-- Review loop-log.md for repeat escalations
+- Review `loop-engine-escalation` issues for repeat escalations
 - Close resolved escalation issues
 
 QUARTERLY (1 hour)

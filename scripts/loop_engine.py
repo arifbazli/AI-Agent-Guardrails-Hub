@@ -18,8 +18,11 @@ Environment variables (GitHub Actions context)
 ----------------------------------------------
 GITHUB_TOKEN          – required for GitHub Issue / PR comment creation
 GITHUB_REPOSITORY     – owner/repo  e.g. arifbazli/AI-Agent-Guardrails-Hub
-GITHUB_REF_NAME       – current branch name
+GITHUB_BASE_REF       – PR target branch; changed files are diffed against it
 PR_NUMBER             – open PR number (optional; used for PR comment)
+
+Only files changed in the PR are evaluated. Policies, test fixtures and
+workflows are never auto-fixed, and evaluation errors fail closed.
 """
 
 from __future__ import annotations
@@ -125,14 +128,34 @@ def yaml_to_opa_input(pipeline_yaml: dict) -> dict:
     return doc
 
 
-def get_pr_yaml_files(pr_branch: str = "") -> list[str]:
-    """Find all non-policy YAML files changed in this PR branch.
+# Paths the Loop Engine must never evaluate as pipelines or auto-fix: policy
+# files (the rules themselves), deliberately-violating test fixtures, and
+# GitHub workflow/agent configuration.
+PROTECTED_PATH_PREFIXES = ("policies/", "test-inputs/", ".github/")
 
-    Returns a list of file paths relative to the repository root.
-    Falls back to ``test-inputs/`` YAML files when no PR-changed files are
-    found (e.g. running locally or without a PR branch).
+
+class GitDiffError(RuntimeError):
+    """Raised when the PR's changed files cannot be determined."""
+
+
+def is_protected_path(path: str) -> bool:
+    normalized = os.path.normpath(path).replace(os.sep, "/")
+    return normalized.startswith(PROTECTED_PATH_PREFIXES) or normalized.startswith("../")
+
+
+def default_base_ref() -> str:
+    """The PR's target branch (GitHub sets GITHUB_BASE_REF on pull_request)."""
+    return os.environ.get("LOOP_BASE_REF") or os.environ.get("GITHUB_BASE_REF") or "main"
+
+
+def get_pr_changed_files(base_ref: str = "") -> list[str]:
+    """Files changed in this PR: ``git diff origin/<base_ref>...HEAD``.
+
+    Fails closed: raises GitDiffError when the diff cannot be computed,
+    instead of returning an empty list that would look like "nothing to
+    check".
     """
-    base = f"origin/{pr_branch}" if pr_branch else "origin/main"
+    base = f"origin/{base_ref or default_base_ref()}"
     try:
         result = subprocess.run(
             ["git", "diff", "--name-only", f"{base}...HEAD"],
@@ -140,89 +163,42 @@ def get_pr_yaml_files(pr_branch: str = "") -> list[str]:
             text=True,
             timeout=30,
         )
-    except subprocess.TimeoutExpired:
-        print(f"[get_pr_yaml_files] git diff timed out against {base} — falling back to test-inputs/", file=sys.stderr)
-        result = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="timeout")
-    changed = result.stdout.strip().split("\n")
-
-    yaml_files: list[str] = []
-    for f in changed:
-        if not f:
-            continue
-        # Never evaluate policy files — only pipeline YAML
-        if "policies/" in f:
-            continue
-        if f.endswith((".yaml", ".yml")) and os.path.exists(f):
-            yaml_files.append(f)
-
-    # Fallback: test-inputs/ folder yaml files
-    if not yaml_files:
-        for root, _dirs, files in os.walk("test-inputs"):
-            for fname in files:
-                if fname.endswith((".yaml", ".yml")):
-                    yaml_files.append(os.path.join(root, fname))
-
-    return yaml_files
+    except subprocess.TimeoutExpired as exc:
+        raise GitDiffError(f"git diff against {base} timed out") from exc
+    if result.returncode != 0:
+        raise GitDiffError(f"git diff against {base} failed: {result.stderr.strip()}")
+    return [f for f in result.stdout.splitlines() if f]
 
 
-def get_pr_changed_files(pr_branch: str = "") -> list[str]:
-    """Get list of files changed in this PR branch relative to origin/main.
+def get_pr_yaml_files(base_ref: str = "") -> list[str]:
+    """Changed YAML files in this PR that may be pipelines.
 
-    Parameters
-    ----------
-    pr_branch:
-        Optional branch name.  When provided the diff is computed against
-        ``origin/<pr_branch>``; otherwise ``origin/main`` is used as the base.
+    Protected paths (policies, test fixtures, workflows) are never returned,
+    and there is no fallback: a PR without pipeline YAML has nothing to
+    evaluate.
     """
-    base = f"origin/{pr_branch}" if pr_branch else "origin/main"
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--name-only", f"{base}...HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        print(f"[get_pr_changed_files] git diff timed out against {base}", file=sys.stderr)
-        return []
-    raw = result.stdout.strip()
-    if not raw:
-        return []
-    return raw.split("\n")
+    return [
+        f for f in get_pr_changed_files(base_ref)
+        if f.endswith((".yaml", ".yml")) and not is_protected_path(f) and os.path.exists(f)
+    ]
 
 
-def get_fix_target(violation: "Violation", pr_branch: str = "") -> str:
-    """
-    Find the correct file to fix.
-    Never fix .rego policy files.
-    Always fix the pipeline YAML that contains the violation.
+def get_fix_target(violation: "Violation", base_ref: str = "") -> str:
+    """The file an auto-fix may modify, or ``""`` when there is none.
 
-    Priority order:
-    1. If violation.file is already a non-policy YAML, use it directly.
-    2. Any .yaml/.yml file in the PR diff that is NOT in policies/ folder.
-    3. test-inputs/ folder yaml files.
-    4. The specific file path from the violation message (last resort).
+    Never returns a protected path (policies, fixtures, workflows). When the
+    violation points at a protected file, the first changed, unprotected
+    pipeline YAML in the PR is used instead.
     """
     target = violation.file
-
-    # If the target is not a .rego policy file, use it as-is
-    if not (target.endswith(".rego") or "policies/" in target):
+    if target and not is_protected_path(target):
         return target
-
-    # Never fix policy files — search for the pipeline YAML instead
-    changed_files = get_pr_changed_files(pr_branch)
-    for f in changed_files:
-        if f.endswith((".yaml", ".yml")) and "policies/" not in f:
-            return f
-
-    # Fallback: test-inputs/ folder yaml files
-    test_input_yamls = sorted(
-        list(Path("test-inputs").glob("*.yaml")) + list(Path("test-inputs").glob("*.yml"))
-    )
-    if test_input_yamls:
-        return str(test_input_yamls[0])
-
-    return target
+    try:
+        candidates = get_pr_yaml_files(base_ref)
+    except GitDiffError as exc:
+        print(f"[get_fix_target] {exc} — no fix target", file=sys.stderr)
+        return ""
+    return candidates[0] if candidates else ""
 
 
 # ---------------------------------------------------------------------------
@@ -287,13 +263,17 @@ class HarnessAutoFixer:
         summaries = []
         for v in violations:
             target = get_fix_target(v)
-            summaries.append(f"Apply fix for {v.rule_id} in {target}")
+            if target:
+                summaries.append(f"Apply fix for {v.rule_id} in {target}")
         return "; ".join(summaries) if summaries else "no-op"
 
-    def apply_fix(self, violations: list[Violation], pr_branch: str = "") -> None:
+    def apply_fix(self, violations: list[Violation], base_ref: str = "") -> None:
         for v in violations:
-            # Resolve the correct pipeline YAML target — never fix .rego files
-            resolved_target = get_fix_target(v, pr_branch)
+            # Resolve the pipeline YAML target — never policies, fixtures or workflows
+            resolved_target = get_fix_target(v, base_ref)
+            if not resolved_target or is_protected_path(resolved_target):
+                print(f"[HarnessAutoFixer] No safe fix target for {v.rule_id} — skipping", file=sys.stderr)
+                continue
             if resolved_target != v.file:
                 print(
                     f"[HarnessAutoFixer] Redirecting fix for {v.rule_id} "
@@ -715,6 +695,9 @@ class PiAutoFixer:
 
     def apply_fix(self, violations: list[Violation]) -> None:
         for v in violations:
+            if not v.file or is_protected_path(v.file):
+                print(f"[PiAutoFixer] {v.rule_id} targets protected or unknown path {v.file!r} — skipping", file=sys.stderr)
+                continue
             method = getattr(self, f"_fix_{v.rule_id.lower().replace('-', '_')}", None)
             if method:
                 try:
@@ -829,103 +812,6 @@ class PiAutoFixer:
         if new_tests:
             with test_path.open("a") as fh:
                 fh.write("\n".join(new_tests))
-
-# ---------------------------------------------------------------------------
-# ResearchAutoFixer
-# ---------------------------------------------------------------------------
-
-class ResearchAutoFixer:
-    """Auto-fix logic for Research Agent .rego syntax and duplicate rule IDs."""
-
-    def generate_fix(self, violations: list[Violation]) -> str:
-        summaries = [f"Research fix for {v.rule_id} in {v.file}" for v in violations]
-        return "; ".join(summaries) if summaries else "no-op"
-
-    def apply_fix(self, violations: list[Violation]) -> None:
-        for v in violations:
-            if "syntax" in v.description.lower():
-                self._fix_rego_syntax(v)
-            elif "duplicate" in v.description.lower():
-                self._fix_duplicate_rule_id(v)
-
-    @staticmethod
-    def _fix_rego_syntax(v: Violation) -> None:
-        """Apply common OPA syntax fixes then validate with `opa check`."""
-        path = Path(v.file)
-        if not path.exists():
-            return
-        text = path.read_text()
-        lines = text.splitlines()
-
-        # Fix 1 — ensure file ends with a newline
-        if lines and lines[-1].strip():
-            lines.append("")
-
-        # Fix 2 — missing closing brace at EOF
-        open_braces  = text.count("{")
-        close_braces = text.count("}")
-        if open_braces > close_braces:
-            lines.append("}" * (open_braces - close_braces))
-
-        # Fix 3 — invalid operator := outside of rule head (e.g. package-level assignment)
-        # Only replaces := when it appears as a standalone assignment statement
-        # (not inside [ ] or { } where it is valid Rego syntax).
-        fixed_lines = []
-        inside_comprehension = 0
-        for line in lines:
-            inside_comprehension += line.count("[") - line.count("]")
-            inside_comprehension += line.count("{") - line.count("}")
-            if inside_comprehension <= 0:
-                fixed_lines.append(re.sub(r'(?<![=!<>]):=', "=", line))
-            else:
-                fixed_lines.append(line)
-
-        path.write_text("\n".join(fixed_lines))
-
-        # Validate
-        try:
-            result = subprocess.run(
-                [OPA_PATH, "check", str(path)],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if result.returncode != 0:
-                print(f"[ResearchAutoFixer] opa check still failing: {result.stderr}", file=sys.stderr)
-        except FileNotFoundError:
-            print("[ResearchAutoFixer] opa binary not found — skipping validation", file=sys.stderr)
-        except subprocess.TimeoutExpired:
-            print("[ResearchAutoFixer] opa check timed out after 30s — skipping validation", file=sys.stderr)
-
-    @staticmethod
-    def _fix_duplicate_rule_id(v: Violation) -> None:
-        """Auto-increment duplicate rule ID to next available ID."""
-        policy_dirs = [Path("policies/opa"), Path("policies/pi"), Path("policies/research")]
-        all_ids: list[int] = []
-        for d in policy_dirs:
-            for rego in d.glob("*.rego"):
-                if rego.name.endswith("_test.rego"):
-                    continue
-                # Real rule headers use "# RULE:" (all caps) — see e.g.
-                # pipeline-guardrails.rego — not the mixed-case "# Rule:"
-                # this previously matched, which found zero real rule IDs.
-                for m in re.finditer(r'#\s*RULE:\s*[A-Z]+-(\d+)', rego.read_text(), re.IGNORECASE):
-                    all_ids.append(int(m.group(1)))
-        next_num = (max(all_ids) + 1) if all_ids else 1
-
-        path = Path(v.file)
-        if not path.exists():
-            return
-        text = path.read_text()
-        # Replace the first duplicate occurrence
-        new_text = re.sub(
-            r'(#\s*RULE:\s*[A-Z]+-)(\d+)',
-            lambda m, nn=next_num: f"{m.group(1)}{nn:03d}",
-            text,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-        path.write_text(new_text)
 
 # ---------------------------------------------------------------------------
 # LoopNotifier
@@ -1168,11 +1054,12 @@ class LoopEngine:
                     fix_applied="advisory only — LOW severity is not auto-fixed",
                     result=LoopResult.FAIL,
                 )
-            print("[LoopEngine] LOW-severity violations only — advising, no auto-fix loop")
-            # Advisory-only: never auto-fixed, so there is nothing to escalate
-            # to a human either — escalating here would be a fresh GitHub
-            # Issue/PR comment for something the loop was never asked to fix.
-            return LoopResult.FAIL
+            print("[LoopEngine] LOW-severity violations only — advisory, no auto-fix loop")
+            for v in result.violations:
+                print(f"::warning file={v.file}::{v.rule_id} (LOW, advisory): {v.description}")
+            # Advisory-only per docs/policy-guide.md (LOW warns, never
+            # blocks): nothing to auto-fix and nothing to escalate.
+            return LoopResult.PASS
 
         for attempt in range(1, max_attempts + 1):
             if attempt > 1:
@@ -1251,6 +1138,23 @@ class BaseEvaluator:
         raise NotImplementedError
 
 
+def opa_failure(proc: subprocess.CompletedProcess, data: dict) -> str:
+    """Why an ``opa eval`` run cannot be trusted, or ``""`` when it can.
+
+    Fail closed: a non-zero exit, an ``errors`` payload, or a missing
+    ``result`` (undefined query — wrong package or policy path) must never be
+    read as "no violations".
+    """
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip() or json.dumps(data.get("errors", ""))
+        return f"opa eval exited {proc.returncode}: {detail[:300]}"
+    if data.get("errors"):
+        return f"opa eval reported errors: {json.dumps(data['errors'])[:300]}"
+    if "result" not in data:
+        return "opa eval returned no result (undefined query — wrong package or policy path?)"
+    return ""
+
+
 class BaseFixer:
     def generate_fix(self, violations: list[Violation]) -> str:
         raise NotImplementedError
@@ -1318,6 +1222,12 @@ class OpaEvaluator(BaseEvaluator):
                     os.unlink(tmp_to_delete)
                 except OSError:
                     pass
+
+        failure = opa_failure(proc, data)
+        if failure:
+            return EvalResult(passed=False, raw_output=raw, violations=[
+                Violation(rule_id="OPA-ERROR", severity="CRITICAL", file=self.target_file, description=failure)
+            ])
 
         violations: list[Violation] = []
         results = data.get("result", [])
@@ -1419,6 +1329,12 @@ class PiOpaEvaluator(BaseEvaluator):
             except OSError:
                 pass
 
+        failure = opa_failure(proc, data)
+        if failure:
+            return EvalResult(passed=False, raw_output=raw, violations=[
+                Violation(rule_id="OPA-ERROR", severity="CRITICAL", file=self.activity_path, description=failure)
+            ])
+
         violations: list[Violation] = []
         for r in data.get("result", []):
             for expr in r.get("expressions", []):
@@ -1457,9 +1373,20 @@ class RegoSyntaxEvaluator(BaseEvaluator):
 
     def evaluate(self) -> EvalResult:
         violations: list[Violation] = []
-        for rego_file in Path(self.rego_dir).rglob("*.rego"):
-            if rego_file.name.endswith("_test.rego"):
-                continue
+        rego_files = [
+            f for f in sorted(Path(self.rego_dir).rglob("*.rego"))
+            if not f.name.endswith("_test.rego")
+        ]
+        if not rego_files:
+            # Non-vacuity: "checked 0 files" is not a pass.
+            return EvalResult(passed=False, violations=[Violation(
+                rule_id="REGO-SYNTAX",
+                severity="HIGH",
+                file=self.rego_dir,
+                description=f"No .rego policy files found under {self.rego_dir}",
+            )])
+        print(f"[RegoSyntaxEvaluator] Checking {len(rego_files)} policy file(s) under {self.rego_dir}")
+        for rego_file in rego_files:
             try:
                 proc = subprocess.run(
                     [OPA_PATH, "check", str(rego_file)],
@@ -1486,49 +1413,60 @@ class RegoSyntaxEvaluator(BaseEvaluator):
 # Pipeline runners
 # ---------------------------------------------------------------------------
 
-def _run_harness_loop(max_attempts: int) -> LoopResult:
-    """Run the Harness OPA loop over all pipeline YAML files in the repo.
+def _worse(current: LoopResult, result: LoopResult) -> LoopResult:
+    order = [LoopResult.PASS, LoopResult.FAIL, LoopResult.ESCALATED]
+    return max(current, result, key=order.index)
 
-    Pipeline YAML files are resolved in this priority order:
-    1. Non-policy YAML files changed in the current PR branch (git diff).
-    2. YAML files in ``policies/pipeline/`` and ``test-inputs/`` as a fallback.
+
+def _load_pipeline_yaml(path: Path) -> dict | None:
+    """Parsed document if it is a Harness pipeline (top-level ``pipeline``
+    mapping), else ``None``. Raises when the file cannot be parsed.
     """
-    pr_branch = os.environ.get("GITHUB_REF_NAME", "")
+    import yaml as _yaml  # noqa: PLC0415
+    with path.open() as fh:
+        doc = _yaml.safe_load(fh)
+    if isinstance(doc, dict) and isinstance(doc.get("pipeline"), dict):
+        return doc
+    return None
 
-    # Primary: PR-changed yaml files (excludes policies/)
-    yaml_files = [Path(f) for f in get_pr_yaml_files(pr_branch)]
 
-    # Fallback to well-known directories when running outside a PR context
-    if not yaml_files:
-        for search_dir in [Path("policies/pipeline"), Path("test-inputs")]:
-            if search_dir.exists():
-                yaml_files += list(search_dir.glob("*.yaml")) + list(search_dir.glob("*.yml"))
+def _run_harness_loop(max_attempts: int, base_ref: str = "") -> LoopResult:
+    """Run the Harness OPA loop over Harness pipeline YAML changed in this PR.
 
-    if not yaml_files:
-        print("[harness-loop] No pipeline YAML files found — PASS")
-        return LoopResult.PASS
+    Only changed, unprotected YAML with a top-level ``pipeline`` mapping is
+    evaluated and auto-fixed. There is no fallback to fixtures: a PR without
+    pipeline YAML has nothing to evaluate. Failure to compute the diff or
+    to parse a changed YAML file fails the loop.
+    """
+    try:
+        candidates = [Path(f) for f in get_pr_yaml_files(base_ref)]
+    except GitDiffError as exc:
+        print(f"::error::[harness-loop] {exc}", file=sys.stderr)
+        return LoopResult.FAIL
 
     worst = LoopResult.PASS
-    for yaml_file in yaml_files:
-        input_doc: dict = {"pipeline": {}}  # minimal stub; replaced by actual file content
+    evaluated = 0
+    for yaml_file in candidates:
         try:
-            import yaml as _yaml  # noqa: PLC0415
-            with yaml_file.open() as fh:
-                raw_doc   = _yaml.safe_load(fh) or {}
-            input_doc = yaml_to_opa_input(raw_doc)
-        except Exception:  # noqa: BLE001
-            pass
+            raw_doc = _load_pipeline_yaml(yaml_file)
+        except Exception as exc:  # noqa: BLE001
+            print(f"::error::[harness-loop] Cannot parse {yaml_file}: {exc}", file=sys.stderr)
+            worst = _worse(worst, LoopResult.FAIL)
+            continue
+        if raw_doc is None:
+            print(f"[harness-loop] Skipping {yaml_file} — not a Harness pipeline")
+            continue
+        evaluated += 1
 
         # Write input to a secure temp file for OPA
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", prefix="loop_engine_", delete=False
         ) as tmp:
-            json.dump(input_doc, tmp)
+            json.dump(yaml_to_opa_input(raw_doc), tmp)
             input_tmp_path = tmp.name
 
-        policy_file = "policies/opa/pipeline-guardrails.rego"
         evaluator = OpaEvaluator(
-            policy_path=policy_file,
+            policy_path="policies/opa/pipeline-guardrails.rego",
             input_path=input_tmp_path,
             query="data.harness.pipeline.guardrails.violation",
             target_file=str(yaml_file),
@@ -1549,68 +1487,58 @@ def _run_harness_loop(max_attempts: int) -> LoopResult:
         if pg002_fixes:
             LoopNotifier(pipeline="harness", rule_id="PG-002", max_attempts=max_attempts).notify_secret_masked(pg002_fixes)
 
-        if result == LoopResult.ESCALATED:
-            worst = LoopResult.ESCALATED
-        elif result == LoopResult.FAIL and worst == LoopResult.PASS:
-            worst = LoopResult.FAIL
+        worst = _worse(worst, result)
+
+    print(
+        f"[harness-loop] Evaluated {evaluated} pipeline file(s) of "
+        f"{len(candidates)} changed YAML file(s) — {worst.value}"
+    )
     return worst
 
 
 PI_ACTIVITY_FILENAME = "pi-agent-activity.yaml"
 
 
-def find_pi_activity_file(pr_branch: str = "") -> str | None:
-    """Find a Pi-agent activity payload changed in this PR, falling back to
-    the checked-in fixture (test-inputs/pi-agent-activity.yaml) when none
-    is present — e.g. a PR that doesn't touch Pi agent work, or running
-    outside a PR context.
+def find_pi_activity_file(base_ref: str = "") -> str | None:
+    """The Pi-agent activity payload changed in this PR, or ``None``.
 
-    A Pi coding agent is expected to commit a file with this exact name
-    (schema documented in .github/agents/pi-guardrail-agent.md) describing
-    what it actually did — bash commands run, workflow steps taken, files
-    it wrote — so PI-001..PI-010 can be evaluated for real.
+    A Pi coding agent commits a file with this exact name (schema in
+    .github/agents/pi-guardrail-agent.md) describing what it actually did,
+    so PI-001..PI-010 can be evaluated. The schema fixture under
+    test-inputs/ is never used as a stand-in for real activity.
     """
-    changed = get_pr_changed_files(pr_branch)
-    for f in changed:
-        if os.path.basename(f) == PI_ACTIVITY_FILENAME and os.path.exists(f):
+    for f in get_pr_changed_files(base_ref):
+        if os.path.basename(f) == PI_ACTIVITY_FILENAME and not is_protected_path(f) and os.path.exists(f):
             return f
-    fallback = Path("test-inputs") / PI_ACTIVITY_FILENAME
-    if fallback.exists():
-        return str(fallback)
     return None
 
 
-def _run_pi_loop(max_attempts: int) -> LoopResult:
-    """Run the Pi loop against a real pi_agent activity payload when one is
-    available (PR-changed or the checked-in fixture) via PiOpaEvaluator;
-    falls back to a Rego syntax check of policies/pi/*.rego only if no
-    activity payload exists anywhere (should not happen in practice, since
-    the checked-in fixture is always present, but kept as a defensive
-    fallback for a repo checkout that's missing test-inputs/).
-    """
-    pr_branch = os.environ.get("GITHUB_REF_NAME", "")
-    activity_file = find_pi_activity_file(pr_branch)
+def _run_pi_loop(max_attempts: int, base_ref: str = "") -> LoopResult:
+    """Run the Pi loop against the pi_agent activity payload in this PR."""
+    try:
+        activity_file = find_pi_activity_file(base_ref)
+    except GitDiffError as exc:
+        print(f"::error::[pi-loop] {exc}", file=sys.stderr)
+        return LoopResult.FAIL
 
     if activity_file is None:
-        print("[pi-loop] No pi-agent-activity.yaml found anywhere — falling back to Rego syntax check only")
-        evaluator = RegoSyntaxEvaluator("policies/pi")
-    else:
-        print(f"[pi-loop] Evaluating real pi_agent activity from {activity_file}")
-        evaluator = PiOpaEvaluator(activity_file)
+        print(f"[pi-loop] No {PI_ACTIVITY_FILENAME} changed in this PR — evaluated 0 activity records")
+        return LoopResult.PASS
 
-    fixer   = PiAutoFixer()
-    context = {"rule_id": "PI-*", "file": activity_file or "policies/pi"}
+    print(f"[pi-loop] Evaluating pi_agent activity from {activity_file}")
+    context = {"rule_id": "PI-*", "file": activity_file}
     engine  = LoopEngine("pi", context, max_attempts)
-    return engine.run(evaluator, fixer)
+    return engine.run(PiOpaEvaluator(activity_file), PiAutoFixer())
 
 
-def _run_research_loop(max_attempts: int) -> LoopResult:
-    """Run the Research loop — OPA syntax validation of all policy files."""
-    evaluator = RegoSyntaxEvaluator("policies")
-    fixer     = ResearchAutoFixer()
-    context   = {"rule_id": "REGO-SYNTAX"}
-    engine    = LoopEngine("research", context, max_attempts)
-    return engine.run(evaluator, fixer)
+def _run_research_loop(max_attempts: int, base_ref: str = "") -> LoopResult:  # noqa: ARG001
+    """Validate the syntax of every policy file. Report only: the Loop
+    Engine never edits policy files.
+    """
+    result = RegoSyntaxEvaluator("policies").evaluate()
+    for v in result.violations:
+        print(f"::error file={v.file}::{v.rule_id}: {v.description}", file=sys.stderr)
+    return LoopResult.PASS if result.passed else LoopResult.FAIL
 
 # ---------------------------------------------------------------------------
 # post-report helper
@@ -1689,6 +1617,8 @@ def main() -> int:
                         help="Enable auto-fix (true/false)")
     parser.add_argument("--pr-branch",    type=str, default="",
                         help="PR branch name")
+    parser.add_argument("--base-ref",     type=str, default="",
+                        help="PR target branch to diff against (default: $GITHUB_BASE_REF or main)")
     parser.add_argument("--pr-number",    type=str, default="",
                         help="PR number")
     parser.add_argument(
@@ -1724,7 +1654,7 @@ def main() -> int:
     }
 
     runner = runners[args.pipeline]
-    result = runner(args.max_attempts)
+    result = runner(args.max_attempts, args.base_ref)
 
     print(f"\n[LoopEngine] Final result for pipeline '{args.pipeline}': {result.value}")
 
