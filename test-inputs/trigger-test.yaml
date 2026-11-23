@@ -8,19 +8,31 @@ pipeline:
     - stage:
         name: deploy-production
         type: Deployment
+  timeout: 1h
         spec:
           environment:
             type: Production
           execution:
             steps:
               - step:
+                  name: approval-gate
+                  type: HarnessApproval
+                  spec: {}
+              - step:
+rollbackSteps:
+  - step:
+      type: HelmRollback
+      name: auto-rollback
+      spec: {}
+
                   name: deploy-app
                   type: Run
                   spec:
-                    image: badregistry.io/app:latest
+                    image: gcr.io/deloitte-gcs/app:latest
                     envVariables:
-                      DB_PASSWORD: plaintext123
-                      API_KEY: hardcoded-key-abc
+                      DB_PASSWORD: <+secrets.getValue("auto-migrated-db_password")>  # AUTO-FIXED by Loop Engine
+                      API_KEY: <+secrets.getValue("auto-migrated-api_key")>  # AUTO-FIXED by Loop Engine
           infrastructure:
             spec:
-              delegateSelectors: []
+              delegateSelectors:
+              - org-approved
