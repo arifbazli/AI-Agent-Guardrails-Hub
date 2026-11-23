@@ -406,5 +406,3 @@ Each row records one loop attempt:
 | 2026-11-23 05:06:13 UTC | harness | PG-009 | 0 | Pipeline is missing the required tag: 'cost-centre'. | advisory only — LOW severity is not auto-fixed | FAIL |
 
 | 2026-11-23 05:06:13 UTC | harness | PG-009 | 0 | Pipeline is missing the required tag: 'owner'. | advisory only — LOW severity is not auto-fixed | FAIL |
-
-| 2026-11-23 05:06:33 UTC | pi | PI-* | 1 |  | none | PASS |
