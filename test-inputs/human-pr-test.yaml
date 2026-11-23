@@ -8,20 +8,32 @@ pipeline:
     - stage:
         name: deploy
         type: Deployment
+  timeout: 1h
         spec:
           environment:
             type: Production
           execution:
             steps:
               - step:
+                  name: approval-gate
+                  type: HarnessApproval
+                  spec: {}
+              - step:
+rollbackSteps:
+  - step:
+      type: HelmRollback
+      name: auto-rollback
+      spec: {}
+
                   name: run
                   type: Run
                   spec:
-                    image: bad.registry.io/app:latest
+                    image: gcr.io/deloitte-gcs/app:latest
                     envVariables:
                       # DELIBERATE TEST VIOLATION: plaintext secret used to trigger
                       # the Loop Engine OPA policy check (no real credential).
-                      SECRET: plaintext123
+                      SECRET: <+secrets.getValue("auto-migrated-secret")>  # AUTO-FIXED by Loop Engine
           infrastructure:
             spec:
-              delegateSelectors: []
+              delegateSelectors:
+              - org-approved
