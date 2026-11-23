@@ -1,0 +1,56 @@
+name: Policy CI
+
+# Read-only verification gate: policy syntax, OPA unit tests and Loop Engine
+# specs. Intended as the required status check for branch protection.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: policy-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OPA_VERSION: "v0.68.0"
+
+jobs:
+  verify:
+    name: Policy CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Install OPA
+        run: |
+          curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
+            https://github.com/open-policy-agent/opa/releases/download/${{ env.OPA_VERSION }}/opa_linux_amd64_static \
+            -o /usr/local/bin/opa
+          chmod +x /usr/local/bin/opa
+          opa version
+
+      - name: Check policy syntax
+        run: opa check policies/
+
+      - name: Run OPA unit tests
+        run: opa test policies/opa/ policies/pi/ -v
+
+      - name: Setup Python
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: python3 -m pip install --quiet pyyaml
+
+      - name: Run Loop Engine specs
+        env:
+          OPA_PATH: /usr/local/bin/opa
+        run: python3 -m unittest discover -s tests -v

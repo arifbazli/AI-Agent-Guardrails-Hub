@@ -103,11 +103,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           python3 scripts/loop_engine.py \
             --pipeline harness \
             --max-attempts 3 \
             --auto-fix true \
+            --base-ref "$BASE_REF" \
             --pr-branch "$HEAD_REF" \
             --pr-number "${{ github.event.pull_request.number }}"
         continue-on-error: true
@@ -116,7 +118,9 @@ jobs:
         env:
           HEAD_REF: ${{ github.head_ref }}
         run: |
-          git add -A
+          # Never commit policies, fixtures, workflows or the loop log —
+          # only auto-fixed pipeline YAML changed in this PR.
+          git add -A -- . ':(exclude)policies' ':(exclude)test-inputs' ':(exclude).github'
           if git diff --staged --quiet; then
             echo "No Harness fixes to commit"
             exit 0
@@ -165,6 +169,12 @@ jobs:
 
           Check loop-log.md for full history." \
             --label "loop-engine-escalation,needs-human-review"
+
+      - name: Fail job if Harness evaluation did not pass
+        if: steps.harness_eval.outcome == 'failure'
+        run: |
+          echo "::error::Harness policy evaluation did not pass — see 'Run Harness OPA evaluation'"
+          exit 1
 
   # --------------------------------------------------------------------------
   # Pi Workflow Loop
@@ -248,11 +258,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           python3 scripts/loop_engine.py \
             --pipeline pi \
             --max-attempts 3 \
             --auto-fix true \
+            --base-ref "$BASE_REF" \
             --pr-branch "$HEAD_REF" \
             --pr-number "${{ github.event.pull_request.number }}"
         continue-on-error: true
@@ -261,7 +273,8 @@ jobs:
         env:
           HEAD_REF: ${{ github.head_ref }}
         run: |
-          git add -A
+          # Never commit policies, fixtures, workflows or the loop log.
+          git add -A -- . ':(exclude)policies' ':(exclude)test-inputs' ':(exclude).github'
           if git diff --staged --quiet; then
             echo "No Pi fixes to commit"
             exit 0
@@ -310,6 +323,12 @@ jobs:
 
           Check loop-log.md for full history." \
             --label "loop-engine-escalation,needs-human-review"
+
+      - name: Fail job if Pi evaluation did not pass
+        if: steps.pi_eval.outcome == 'failure'
+        run: |
+          echo "::error::Pi policy evaluation did not pass — see 'Run Pi evaluation'"
+          exit 1
 
   # --------------------------------------------------------------------------
   # Research Agent Loop (runs after pi-loop)
@@ -387,43 +406,9 @@ jobs:
           echo "/tmp/loop-engine-venv/bin" >> "$GITHUB_PATH"
           /tmp/loop-engine-venv/bin/pip install --quiet pyyaml requests
 
-      - name: Validate research proposals
-        id: research_eval
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          HEAD_REF: ${{ github.head_ref }}
+      - name: Validate policy syntax (report only — never edits policies)
         run: |
-          python3 scripts/loop_engine.py \
-            --pipeline research \
-            --max-attempts 3 \
-            --auto-fix true \
-            --pr-branch "$HEAD_REF" \
-            --pr-number "${{ github.event.pull_request.number }}"
-        continue-on-error: true
-
-      - name: Commit research fixes
-        env:
-          HEAD_REF: ${{ github.head_ref }}
-        run: |
-          git add -A
-          if git diff --staged --quiet; then
-            echo "No research fixes to commit"
-            exit 0
-          fi
-          git commit -m \
-            "[Loop Engine] Research auto-fix — $(date +%Y-%m-%d)"
-          for i in 1 2 3; do
-            if git pull --rebase origin "$HEAD_REF" && \
-               git push origin HEAD:"$HEAD_REF"; then
-              echo "Push succeeded on attempt $i"
-              exit 0
-            fi
-            echo "Push attempt $i failed, retrying..."
-            sleep 5
-          done
-          echo "::error::Failed to push Research auto-fix commit after 3 attempts"
-          exit 1
+          python3 scripts/loop_engine.py --pipeline research
 
   # --------------------------------------------------------------------------
   # Loop Engine Summary

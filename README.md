@@ -20,7 +20,7 @@ opa test policies/opa/ policies/pi/ -v
 ```
 
 > [!WARNING]
-> Reference automation—not a production security boundary. Workflows can commit changes and create issues. Review all fixes and harden CI failure handling before using results as merge gates.
+> Reference automation—not a production security boundary. Workflows can commit auto-fixes to PR pipeline YAML and create issues. Review all fixes before merging.
 
 ## Contributing
 
